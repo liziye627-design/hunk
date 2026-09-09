@@ -158,6 +158,15 @@ export interface HistoryCommandInput {
   extensionSelectionOverrides?: ExtensionSelectionOverride[];
 }
 
+/** Read-only workspace status; launch preferences seed all subsequently routed surfaces. */
+export interface StatusCommandInput {
+  kind: "status";
+  static: boolean;
+  json: boolean;
+  color: HistoryColorMode;
+  options: CommonOptions;
+}
+
 export interface HelpCommandInput {
   kind: "help";
   text: string;
@@ -457,6 +466,7 @@ export type ParsedCliInput =
   | OpenCommandInput
   | CliInput
   | HistoryCommandInput
+  | StatusCommandInput
   | HelpCommandInput
   | PagerCommandInput
   | DaemonServeCommandInput
