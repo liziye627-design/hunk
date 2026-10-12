@@ -13,57 +13,66 @@ afterEach(() => {
 });
 
 /** Verify that editor handoff delivers the first key without an Enter workaround. */
-test("a terminal editor receives its first key and returns input to the review", async () => {
-  const root = mkdtempSync(join(tmpdir(), "hunk-editor-input-"));
-  roots.push(root);
-  const before = join(root, "before.txt");
-  const after = join(root, "after.txt");
-  const received = join(root, "editor-input.txt");
-  const editor = join(root, "editor.mjs");
-  writeFileSync(before, "before\n");
-  writeFileSync(after, "after\n");
-  writeFileSync(
-    editor,
-    `import { writeFileSync } from "node:fs";
+test.each([
+  { label: "a plain first key", input: "j" },
+  { label: "a first key coalesced with a terminal reply", input: "\x1b[?1;2cj" },
+])(
+  "a terminal editor receives $label and returns input to the review",
+  async ({ input }) => {
+    const root = mkdtempSync(join(tmpdir(), "hunk-editor-input-"));
+    roots.push(root);
+    const before = join(root, "before.txt");
+    const after = join(root, "after.txt");
+    const received = join(root, "editor-input.txt");
+    const editor = join(root, "editor.mjs");
+    writeFileSync(before, "before\n");
+    writeFileSync(after, "after\n");
+    writeFileSync(
+      editor,
+      `import { writeFileSync } from "node:fs";
+import { stripVTControlCharacters } from "node:util";
 process.stdin.setRawMode(true);
 process.stdin.on("data", (data) => {
-  // Ignore pending capability replies from the test terminal, not editor keystrokes.
-  if (data[0] === 0x1b) return;
-  writeFileSync(${JSON.stringify(received)}, data);
+  // Strip complete replies without discarding keys delivered in the same chunk.
+  const keys = stripVTControlCharacters(data.toString());
+  if (!keys) return;
+  writeFileSync(${JSON.stringify(received)}, keys);
   process.stdin.setRawMode(false);
   process.exit(0);
 });
 process.stdin.resume();
 process.stdout.write("\\x1b[2J\\x1b[HEDITOR_READY_FOR_FIRST_KEY");
 `,
-  );
-  const session = await harness.launchHunk({
-    args: ["diff", "--files", before, after, "--no-extensions"],
-    cwd: root,
-    cols: 100,
-    rows: 24,
-    env: { EDITOR: `"${process.execPath}" "${editor}"` },
-  });
-
-  try {
-    await session.waitForText("after.txt");
-    await harness.ensureKeyboardIsLive(session);
-    await session.press("e");
-    await session.waitForText("EDITOR_READY_FOR_FIRST_KEY");
-    session.writeRaw("j");
-    await harness.waitForSnapshot(
-      session,
-      (text) => existsSync(received) && text.includes("after.txt"),
     );
-    expect(readFileSync(received, "utf8")).toBe("j");
-    await session.press("?");
-    await session.waitForText("Controls help");
-    await session.press("?");
-    await session.press("q");
-  } finally {
-    session.close();
-  }
-}, 30_000);
+    const session = await harness.launchHunk({
+      args: ["diff", "--files", before, after, "--no-extensions"],
+      cwd: root,
+      cols: 100,
+      rows: 24,
+      env: { EDITOR: `"${process.execPath}" "${editor}"` },
+    });
+
+    try {
+      await session.waitForText("after.txt");
+      await harness.ensureKeyboardIsLive(session);
+      await session.press("e");
+      await session.waitForText("EDITOR_READY_FOR_FIRST_KEY");
+      session.writeRaw(input);
+      await harness.waitForSnapshot(
+        session,
+        (text) => existsSync(received) && text.includes("after.txt"),
+      );
+      expect(readFileSync(received, "utf8")).toBe("j");
+      await session.press("?");
+      await session.waitForText("Controls help");
+      await session.press("?");
+      await session.press("q");
+    } finally {
+      session.close();
+    }
+  },
+  30_000,
+);
 
 /** Smoke-test the reported editor when Neovim is installed on the test host. */
 test.skipIf(!Bun.which("nvim"))(
