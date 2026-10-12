@@ -5,33 +5,13 @@ description: Load the versioned machine guidance that teaches coding agents Hunk
 
 Hunk ships a generated `hunk-review` skill with every installation. It is the authoritative machine-facing workflow for session selection, efficient review inspection, navigation, reloads, and comments.
 
-## Install it into your agent
+## Locate the installed skill
 
 ```bash
-npx skills add modem-dev/hunk -g --skill hunk-review
-npx skills add modem-dev/hunk --skill hunk-review -a claude-code -a codex
+hunk skill path
 ```
 
-The [skills CLI](https://github.com/vercel-labs/skills) handles agent detection and installation locations. Installation requires Node/npm and network access. Use `-g` for user-wide installation; omit it to install into the current project. Use `-a` to target specific agents, or follow the interactive agent selection.
-
-The installed file is deliberately light. It carries the skill's `name` and `description` so the agent knows when to use it, and its body tells the agent to run:
-
-```bash
-hunk skill show
-```
-
-That prints the full skill shipped with the installed Hunk version, so the agent always sees instructions that match the CLI on the machine, and upgrading Hunk never requires reinstalling the skill.
-
-## Use without installing a skill
-
-Without Node/npm, or if you prefer not to install a skill, tell your agent: “Run `hunk skill show` and follow its instructions to review the live Hunk session.”
-
-You can also locate or read either bundled skill directly:
-
-```bash
-hunk skill show   # print the full skill
-hunk skill path   # print its path, for agents that load or symlink files
-```
+Load or symlink the returned file according to your coding agent's skill mechanism. Resolve the path again after upgrades so the guidance stays aligned with the installed CLI.
 
 For agents that need a stable web-readable URL, use the [generated Hunk review skill](/docs/hunk-review-skill.md). The published artifact and installed skill are rendered by the same function; neither is a handwritten copy.
 

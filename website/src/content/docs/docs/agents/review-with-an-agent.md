@@ -15,20 +15,16 @@ Keep that window open. Normal Hunk sessions register with a local loopback daemo
 
 ## Give the agent the skill
 
-Install the bundled review skill into your agent once:
+In the agent's shell, locate the skill bundled with the installed Hunk version:
 
 ```bash
-npx skills add modem-dev/hunk -g --skill hunk-review
+hunk skill path
 ```
 
-The skills CLI handles agent selection and installation locations (requires Node/npm and network access). Add `-a claude-code -a codex` to target specific agents, or omit `-g` to install into the current project.
-
-The installed file is a short pointer, not a copy. It keeps the skill's name and description so the agent knows when to use it, and loads the instructions with `hunk skill show`, so upgrading Hunk never leaves a stale skill behind. See [Hunk review skill](/docs/agents/review-skill/) for the details.
-
-Then ask the agent to review the session. Without an installed skill, a portable prompt is:
+Ask the agent to load that file and use it for the review. A portable prompt is:
 
 ```text
-Run `hunk skill show` and follow that skill to review the live Hunk session.
+Load the Hunk skill and use it for this review. Run `hunk skill path` to get the skill path.
 ```
 
 The skill tells agents not to launch the interactive TUI themselves. It teaches them to use the session surface instead.
