@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { HunkUserError } from "../../core/run/errors";
 import { resolveExtensionContainerEntries } from "../discovery";
@@ -33,6 +33,50 @@ function createNpmInstallEnvironment(
   return { ...environment, ...policy };
 }
 
+/** Run npm without a shell and report missing executables consistently. */
+function runNpm(command: string[], args: string[], cwd: string, env: NodeJS.ProcessEnv) {
+  try {
+    return Bun.spawnSync([...command, ...args], {
+      cwd,
+      env,
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 120_000,
+    });
+  } catch (error) {
+    throw new HunkUserError(
+      `Could not run npm: ${error instanceof Error ? error.message : String(error)}`,
+      ["Installing npm extensions requires npm (and Node.js) on PATH."],
+    );
+  }
+}
+
+/** Forward npm's project configuration without replacing user/global configuration.
+ * npm chooses the project root, including workspace roots and ancestor manifests.
+ * A temporary project-layer copy preserves npm's precedence and environment interpolation;
+ * installation keeps the launch cwd so relative certificate/config paths still resolve normally.
+ */
+function stageProjectNpmConfig(
+  command: string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  stagingDir: string,
+) {
+  const proc = runNpm(command, ["prefix", "--global=false", "--location=project"], cwd, env);
+  if (proc.exitCode !== 0) {
+    throw new HunkUserError(`npm configuration failed: ${proc.stderr?.toString().trim()}`);
+  }
+
+  const prefix = proc.stdout?.toString().trim() ?? "";
+  if (!isAbsolute(prefix)) throw new HunkUserError("npm did not return a valid project root.");
+
+  const config = join(prefix, ".npmrc");
+  if (existsSync(config)) {
+    writeFileSync(join(stagingDir, ".npmrc"), readFileSync(config), { mode: 0o600, flag: "wx" });
+  }
+}
+
 /** Install one registry package and expose only its declared entries through the workspace root.
  * Keep the package and its dependencies in their normal node_modules layout so imports survive
  * promotion. The generated root manifest lets existing discovery use the same entry contract.
@@ -41,9 +85,19 @@ export function stageNpmPackage(
   source: NpmExtensionInstallSource,
   stagingDir: string,
   env?: NodeJS.ProcessEnv,
+  cwd = process.cwd(),
 ) {
   writeFileSync(join(stagingDir, "package.json"), JSON.stringify({ private: true }));
   const environment = createNpmInstallEnvironment(stagingDir, env);
+  let command: string[];
+  try {
+    command = resolveNpmCommand(environment);
+  } catch (error) {
+    throw new HunkUserError(
+      `Could not run npm: ${error instanceof Error ? error.message : String(error)}`,
+      ["Installing npm extensions requires npm (and Node.js) on PATH."],
+    );
+  }
   // npm handles registry configuration/auth, selectors, tarball integrity, and dependencies.
   // Host-provided peers must not pull in a second Hunk runtime; scripts are never implicit consent.
   const args = [
@@ -63,19 +117,12 @@ export function stageNpmPackage(
   ];
   let proc: ReturnType<typeof Bun.spawnSync>;
   try {
-    proc = Bun.spawnSync([...resolveNpmCommand(environment), ...args], {
-      cwd: stagingDir,
-      env: environment,
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "pipe",
-      timeout: 120_000,
-    });
-  } catch (error) {
-    throw new HunkUserError(
-      `Could not run npm: ${error instanceof Error ? error.message : String(error)}`,
-      ["Installing npm extensions requires npm (and Node.js) on PATH."],
-    );
+    stageProjectNpmConfig(command, cwd, environment, stagingDir);
+    proc = runNpm(command, args, cwd, environment);
+  } finally {
+    // Project configuration may contain credentials. Never promote it into a
+    // persistent managed workspace, even after a failed acquisition.
+    rmSync(join(stagingDir, ".npmrc"), { force: true });
   }
 
   if (proc.exitCode !== 0) {

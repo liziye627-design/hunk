@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { resolveNpmCommand } from "../../packages/hunk/src/extensions/manage/npmCommand";
 
 /** Start an isolated registry and publish real npm tarballs without public network access. */
-export async function createNpmRegistryTest(root: string) {
+export async function createNpmRegistryTest(root: string, options: { authToken?: string } = {}) {
   const packages: Record<
     string,
     {
@@ -12,17 +12,29 @@ export async function createNpmRegistryTest(root: string) {
     }
   > = {};
   writeFileSync(join(root, "registry.json"), "{}");
+  writeFileSync(join(root, "user.npmrc"), "");
+  writeFileSync(join(root, "global.npmrc"), "");
+  writeFileSync(join(root, "registry-auth.json"), JSON.stringify(options.authToken ?? null));
   const proc = Bun.spawn(
     [process.execPath, join(import.meta.dir, "npmRegistryTestServer.ts"), root],
     { stdout: "pipe", stderr: "inherit" },
   );
-  const reader = proc.stdout.getReader();
-  const first = await reader.read();
-  const registry = new TextDecoder().decode(first.value).trim();
-  reader.releaseLock();
-  if (!registry.startsWith("http://127.0.0.1:")) throw new Error("Test registry did not start");
-  writeFileSync(join(root, "user.npmrc"), "");
-  writeFileSync(join(root, "global.npmrc"), "");
+  let registry: string;
+  try {
+    const reader = proc.stdout.getReader();
+    try {
+      const first = await reader.read();
+      registry = new TextDecoder().decode(first.value).trim();
+    } finally {
+      reader.releaseLock();
+    }
+
+    if (!registry.startsWith("http://127.0.0.1:")) throw new Error("Test registry did not start");
+  } catch (error) {
+    proc.kill();
+    await proc.exited;
+    throw error;
+  }
   let counter = 0;
 
   /** Publish a package with caller-controlled entry files, dependencies, and tags. */

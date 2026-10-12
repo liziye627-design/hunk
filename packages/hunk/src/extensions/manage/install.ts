@@ -19,6 +19,8 @@ export interface ExtensionManageContext {
   now?: () => Date;
   /** Package-manager environment, including registry configuration. */
   env?: NodeJS.ProcessEnv;
+  /** Launch directory whose project npm configuration applies. */
+  cwd?: string;
 }
 
 /** Outcome of one install or update, for the runner to phrase. */
@@ -183,7 +185,7 @@ function stageSource(context: ExtensionManageContext, source: ExtensionInstallSo
 
   try {
     if (source.kind === "npm") {
-      const version = stageNpmPackage(source, stagingDir, context.env);
+      const version = stageNpmPackage(source, stagingDir, context.env, context.cwd);
       return { stagingDir, revision: version, version };
     }
 

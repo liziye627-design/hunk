@@ -154,7 +154,10 @@ the install asks for confirmation (or `--yes`) after stating that extensions
 run with your full user permissions. Only install sources you trust.
 
 npm installs require Node.js and npm on PATH and honor normal npm registry and
-credential configuration. Hunk forces local managed installation even if npm is
+credential configuration, including the launch project's `.npmrc`, user/global
+configuration, and environment overrides. Project credentials are forwarded only
+during acquisition, not saved into the managed install. Hunk forces local managed
+installation even if npm is
 configured globally. Each package has an isolated dependency workspace, and its
 hoisted helpers receive the same host APIs and React instance as the entry.
 Installation disables lifecycle scripts and automatic peer installation; publish

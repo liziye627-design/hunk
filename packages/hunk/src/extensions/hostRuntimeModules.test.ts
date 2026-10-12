@@ -185,11 +185,15 @@ describe("registerHostRuntimeModules", () => {
     const moduleRoot = join(root, name, "node_modules");
     const entry = join(moduleRoot, "@test", "guide", "src", "entry.ts");
     const helper = join(moduleRoot, "helper", "index.ts");
+    const cjsHelper = join(moduleRoot, "cjs-helper", "index.cjs");
     mkdirSync(dirname(entry), { recursive: true });
     mkdirSync(dirname(helper), { recursive: true });
+    mkdirSync(dirname(cjsHelper), { recursive: true });
     writeFileSync(
       entry,
-      `import { helperUseState, HelperError } from "helper"; export default { helperUseState, HelperError };`,
+      `import { helperUseState, HelperError } from "helper";
+import cjsHelper from "cjs-helper";
+export default { helperUseState, HelperError, cjsHelper };`,
     );
     writeFileSync(
       join(dirname(helper), "package.json"),
@@ -198,6 +202,19 @@ describe("registerHostRuntimeModules", () => {
     writeFileSync(
       helper,
       `import { useState } from "react"; import { HunkExtensionUserError } from "hunkdiff/extension"; export { useState as helperUseState, HunkExtensionUserError as HelperError };`,
+    );
+    writeFileSync(
+      join(dirname(cjsHelper), "package.json"),
+      JSON.stringify({ name: "cjs-helper", main: "index.cjs" }),
+    );
+    writeFileSync(
+      cjsHelper,
+      `const __hunkHostRequire0 = 42;
+module.exports = {
+  useState: require("react").useState,
+  HunkExtensionUserError: require("hunkdiff/extension").HunkExtensionUserError,
+  value: __hunkHostRequire0,
+};`,
     );
     // A conflicting installed React must not split the helper's hooks from the host.
     const fakeReactDir = join(moduleRoot, "react");
@@ -211,6 +228,7 @@ describe("registerHostRuntimeModules", () => {
     const mod = await importTempExtension(entry);
     expect(mod.default.helperUseState).toBe(useState);
     expect(mod.default.HelperError).toBe(HunkExtensionUserError);
+    expect(mod.default.cjsHelper).toEqual({ useState, HunkExtensionUserError, value: 42 });
 
     // Neighboring unrecorded modules are not included in this workspace's hook.
     const outsider = join(root, "unrecorded", "node_modules", "outsider", "index.ts");

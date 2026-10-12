@@ -4,10 +4,15 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const root = process.argv[2]!;
+const authToken = JSON.parse(readFileSync(join(root, "registry-auth.json"), "utf8"));
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port: 0,
   fetch(request) {
+    if (authToken && request.headers.get("authorization") !== `Bearer ${authToken}`) {
+      return new Response("Test registry requires a bearer token", { status: 401 });
+    }
+
     const url = new URL(request.url);
     if (url.pathname.startsWith("/tarballs/")) {
       return new Response(Bun.file(join(root, url.pathname.slice("/tarballs/".length))));

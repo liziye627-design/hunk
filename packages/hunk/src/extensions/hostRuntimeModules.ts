@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { resolveCanonicalPath } from "../core/run/paths";
 import { resolveManagedNpmModuleRoot } from "./manage/workspace";
@@ -70,10 +71,11 @@ const HOST_MODULE_PREFIX = "hunk-host:";
  * these positions keeps a *data* string like `"react"` (say, a language id)
  * untouched.
  */
+const HOST_SPECIFIERS = Object.keys(HOST_MODULE_LOADERS)
+  .map((specifier) => specifier.replace(/[/@]/g, "\\$&"))
+  .join("|");
 const HOST_SPECIFIER_PATTERN = new RegExp(
-  `((?:\\bfrom|\\bimport|\\brequire)\\s*\\(?\\s*)(["'])(${Object.keys(HOST_MODULE_LOADERS)
-    .map((specifier) => specifier.replace(/[/@]/g, "\\$&"))
-    .join("|")})\\2`,
+  `((?:\\bfrom|\\bimport|\\brequire)\\s*\\(?\\s*)(["'])(${HOST_SPECIFIERS})\\2`,
   "g",
 );
 
@@ -164,6 +166,61 @@ function registerVirtualModules() {
   });
 }
 
+/** Lower CommonJS host requires to static imports so lazy virtual factories finish before evaluation. */
+function rewriteCompiledHostRequires(code: string) {
+  const bindings = new Map<string, string>();
+  let bindingIndex = 0;
+  const pattern = new RegExp(
+    `\\b(?:__require\\d*|require)\\s*\\(\\s*(["'])(${HOST_SPECIFIERS})\\1\\s*\\)`,
+    "g",
+  );
+  const rewritten = code.replace(pattern, (_call, _quote: string, specifier: string) => {
+    let binding = bindings.get(specifier);
+    if (!binding) {
+      do {
+        binding = `__hunkHostRequire${bindingIndex++}`;
+      } while (new RegExp(`\\b${binding}\\b`).test(code));
+      bindings.set(specifier, binding);
+    }
+
+    return binding;
+  });
+  const imports = [...bindings].map(
+    ([specifier, binding]) =>
+      `import * as ${binding} from ${JSON.stringify(`${HOST_MODULE_PREFIX}${specifier}`)};`,
+  );
+  return `${imports.join("\n")}\n${rewritten}`;
+}
+
+/** Convert rewritten CommonJS helpers to ESM without bundling their dependency graph.
+ * Runtime onLoad source results do not preserve CommonJS exports. Let Bun perform
+ * the interop conversion before redirecting host specifiers, including require calls
+ * that become static imports. External imports retain the original module's location.
+ */
+async function compileCommonJsHostImports(path: string, contents: string) {
+  const result = await Bun.build({
+    entrypoints: [path],
+    target: "bun",
+    format: "esm",
+    external: ["*"],
+    plugins: [
+      {
+        name: "hunk-commonjs-host-source",
+        setup(build) {
+          build.onLoad({ filter: /.*/ }, () => ({ contents, loader: "js" }));
+        },
+      },
+    ],
+  });
+  if (!result.success) throw new AggregateError(result.logs, `Could not load ${path}`);
+
+  const code = await result.outputs[0]!.text();
+  return {
+    contents: rewriteHostSpecifiers(rewriteCompiledHostRequires(code)),
+    loader: "js" as const,
+  };
+}
+
 /** Register the transpile-and-rewrite hook for one extension directory. */
 function registerSourceRoot(directory: string) {
   // Bun canonicalizes onLoad paths through symlinks on macOS and Linux, but can
@@ -185,10 +242,21 @@ function registerSourceRoot(directory: string) {
     Bun.plugin({
       name: `hunk-host-extension-source:${sourceRoot}`,
       setup(build) {
-        build.onLoad({ filter }, async (args) => {
-          const source = await Bun.file(args.path).text();
-          const transpiled = transpilerFor(resolveLoader(args.path)).transformSync(source);
-          return { contents: rewriteHostSpecifiers(transpiled), loader: "js" };
+        build.onLoad({ filter }, (args) => {
+          const source = readFileSync(args.path, "utf8");
+          const transpiler = transpilerFor(resolveLoader(args.path));
+          const transpiled = transpiler.transformSync(source);
+          const rewritten = rewriteHostSpecifiers(transpiled);
+          const scan = transpiler.scan(transpiled);
+          if (
+            scan.exports.length === 0 &&
+            !scan.imports.some((entry) => entry.kind === "import-statement") &&
+            /\b(?:module\s*\.\s*exports|exports\s*(?:\.|\[))/.test(transpiled)
+          ) {
+            return compileCommonJsHostImports(args.path, transpiled);
+          }
+
+          return { contents: rewritten, loader: "js" };
         });
       },
     });

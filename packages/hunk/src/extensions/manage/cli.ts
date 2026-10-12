@@ -69,6 +69,7 @@ export async function runExtensionManageCommand(
     installedRoot: requireInstalledRoot(env),
     log: (line) => io.stderr(`${line}\n`),
     env,
+    cwd: process.cwd(),
   };
 
   if (input.action === "install") {

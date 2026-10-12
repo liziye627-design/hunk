@@ -27,9 +27,9 @@ afterEach(async () => {
 });
 
 /** Isolate real package installation, registry traffic, and filesystem cleanup for each test. */
-async function createNpmInstallTest() {
+async function createNpmInstallTest(options: { authToken?: string } = {}) {
   const root = mkdtempSync(join(tmpdir(), "hunk-npm-test-"));
-  const registry = await createNpmRegistryTest(root);
+  const registry = await createNpmRegistryTest(root, options);
   cleanup.push(async () => {
     await registry.close();
     rmSync(root, { recursive: true, force: true });
@@ -93,6 +93,96 @@ test("installs scoped npm entries, dependencies and host peers without running l
   removeExtension(context, source.name);
   expect(existsSync(installed.directory)).toBe(false);
   expect(readInstallRecords(context.installedRoot)).toEqual({});
+});
+
+test("forwards project registry credentials without losing user config or persisting secrets", async () => {
+  const projectToken = "hunk-test-project-token";
+  const userToken = "hunk-test-user-token";
+  const { registry, context, root } = await createNpmInstallTest({ authToken: projectToken });
+  const userRoot = join(root, "user-registry");
+  mkdirSync(userRoot);
+  const userRegistry = await createNpmRegistryTest(userRoot, { authToken: userToken });
+  cleanup.push(() => userRegistry.close());
+  userRegistry.publish("@hunk-user/helper", "1.0.0", {
+    manifest: { hunk: undefined, main: "index.js" },
+    files: { "index.js": "module.exports = 42;" },
+  });
+  const project = join(root, "project");
+  const workspace = join(project, "packages", "consumer");
+  const cwd = join(workspace, "nested");
+  mkdirSync(cwd, { recursive: true });
+  writeFileSync(
+    join(project, "package.json"),
+    JSON.stringify({ private: true, workspaces: ["packages/*"] }),
+  );
+  writeFileSync(join(workspace, "package.json"), JSON.stringify({ name: "hunk-test-workspace" }));
+  // npm ignores workspace-local .npmrc files and uses the root project's configuration.
+  writeFileSync(join(workspace, ".npmrc"), "@hunk-private:registry=http://127.0.0.1:9\n");
+  const projectConfig = `@hunk-private:registry=${registry.registry}
+//${new URL(registry.registry).host}/:_authToken=\${HUNK_TEST_PROJECT_TOKEN}
+global=true
+location=global
+ignore-scripts=false
+legacy-peer-deps=false
+script-shell=node
+`;
+  writeFileSync(join(project, ".npmrc"), projectConfig);
+  writeFileSync(
+    context.env.npm_config_userconfig,
+    `@hunk-user:registry=${userRegistry.registry}
+//${new URL(userRegistry.registry).host}/:_authToken=\${HUNK_TEST_USER_TOKEN}
+`,
+  );
+  const privateContext = {
+    ...context,
+    cwd,
+    env: {
+      ...context.env,
+      // Only project/user scoped configuration can reach the two authenticated registries.
+      npm_config_registry: "http://127.0.0.1:9",
+      HUNK_TEST_PROJECT_TOKEN: projectToken,
+      HUNK_TEST_USER_TOKEN: userToken,
+    },
+  };
+  const manifest = {
+    dependencies: { "@hunk-user/helper": "1.0.0" },
+    peerDependencies: { hunkdiff: "999.0.0" },
+    scripts: { postinstall: "node -e \"require('fs').writeFileSync('SCRIPT-RAN', 'yes')\"" },
+  };
+  const files = { "entry.js": "module.exports = require('@hunk-user/helper');" };
+  registry.publish("@hunk-private/guide", "1.0.0", { manifest, files });
+  const source = parseExtensionInstallSource("npm:@hunk-private/guide");
+  const installed = installExtension(privateContext, source);
+  expect(installed.version).toBe("1.0.0");
+  const packageDir = join(installed.directory, "node_modules", "@hunk-private", "guide");
+  expect(require(join(packageDir, "entry.js"))).toBe(42);
+  expect(existsSync(join(packageDir, "SCRIPT-RAN"))).toBe(false);
+  expect(existsSync(join(installed.directory, "node_modules", "hunkdiff"))).toBe(false);
+  expect(existsSync(join(installed.directory, ".npmrc"))).toBe(false);
+  expect(readFileSync(join(project, ".npmrc"), "utf8")).toBe(projectConfig);
+
+  registry.publish("@hunk-private/guide", "1.1.0", { manifest, files });
+  expect(updateExtension(privateContext, source.name)).toMatchObject({
+    changed: true,
+    version: "1.1.0",
+  });
+  expect(existsSync(join(installed.directory, ".npmrc"))).toBe(false);
+  const records = readFileSync(join(context.installedRoot, "records.json"), "utf8");
+  expect(records).not.toContain(projectToken);
+  expect(records).not.toContain(userToken);
+
+  expect(() =>
+    updateExtension(
+      {
+        ...privateContext,
+        env: { ...privateContext.env, HUNK_TEST_PROJECT_TOKEN: "wrong-token" },
+      },
+      source.name,
+    ),
+  ).toThrow(/npm install failed/);
+  expect(readFileSync(join(context.installedRoot, "records.json"), "utf8")).toBe(records);
+  expect(readdirSync(context.installedRoot).filter((name) => name.startsWith("."))).toEqual([]);
+  expect(existsSync(join(installed.directory, ".npmrc"))).toBe(false);
 });
 
 test("suppresses lifecycle scripts in transitive Git dependencies, including inherited npm config", async () => {
@@ -242,12 +332,13 @@ test("forces local managed layout despite global npm environment or configuratio
   const { registry, context, root } = await createNpmInstallTest();
   registry.publish("hunk-test-global-config", "1.0.0");
   writeFileSync(context.env.npm_config_userconfig, "global=true\nlocation=global\n");
-  for (const config of [
+  for (const [index, config] of [
     {},
     { npm_config_global: "true", npm_config_location: "global" },
     { NPM_CONFIG_GLOBAL: "true", NPM_CONFIG_LOCATION: "global" },
-  ]) {
-    const name = Object.keys(config)[0] ?? "userconfig";
+  ].entries()) {
+    // Configuration names differ only by case; fixture paths must also work on Windows.
+    const name = `config-${index}`;
     const installed = installExtension(
       {
         ...context,
