@@ -44,11 +44,11 @@ function listUpdateMethods() {
 }
 
 /**
- * Print the release-notes link for one version, when that version has a changelog page.
+ * Print the GitHub release-notes link for one comparable version.
  *
  * A plain URL rather than an OSC-8 hyperlink: this output is piped and captured in CI as often as
  * it is read in a terminal, and an escape-wrapped link is invisible to everything downstream.
- * Silent when the version has no page, so a dev build prints its normal output and no dead link.
+ * Omit unknown or non-release version strings without making a network request.
  */
 function reportReleaseNotes(io: SelfUpdateIo, version: string) {
   const url = releaseNotesUrl(version);
@@ -347,9 +347,8 @@ export async function runSelfUpdateCommand(
         ? "An update is available. Run `hunk update` to install it.\n"
         : "Hunk is up to date.\n",
     );
-    // Link whichever version this run reported on: an explicit `--version` request is what the
-    // user asked about, otherwise the channel's latest is what the lines above describe.
-    reportReleaseNotes(io, input.version ?? latestVersion);
+    // Keep the notes aligned with the channel's latest release used by the update status.
+    reportReleaseNotes(io, latestVersion);
     return 0;
   }
 
