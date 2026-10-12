@@ -544,3 +544,133 @@ test("group Enter/Space activation stays local, hidden paths cannot open, and ch
     await host.close();
   }
 });
+
+for (const global of [false, true]) {
+  test(`Log return excludes new opens during delayed cleanup${global ? " and shutdown" : ""}`, async () => {
+    const runtime = createTestStatusRuntime();
+    const openHistory = runtime.openHistory;
+    let finishClose!: () => void;
+    const close = mock(
+      () =>
+        new Promise<void>((resolve) => {
+          finishClose = resolve;
+        }),
+    );
+    const prepare = runtime.prepareHistoryReview;
+    runtime.prepareHistoryReview = mock(prepare);
+    runtime.openHistory = async (path) => {
+      const history = await openHistory(path);
+      history.close = close;
+      return history;
+    };
+    const host = await createTestStatusHost(runtime);
+    try {
+      await act(async () => host.setup.mockInput.pressKey("l"));
+      await settleStatusTest(host.setup);
+      await act(async () => host.setup.mockInput.pressKey("q"));
+      await settleStatusTest(host.setup);
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(host.setup.captureCharFrame()).not.toContain("Other worktrees");
+      await act(async () => {
+        host.setup.mockInput.pressEnter();
+        host.setup.mockInput.pressKey("q");
+      });
+      await settleStatusTest(host.setup);
+      expect(runtime.prepareHistoryReview).not.toHaveBeenCalled();
+      expect(host.mounted).toHaveLength(0);
+      expect(close).toHaveBeenCalledTimes(1);
+      if (global) {
+        await act(async () => host.abort.abort());
+        await settleStatusTest(host.setup);
+        expect(host.quit).not.toHaveBeenCalled();
+      }
+      await act(async () => finishClose());
+      await settleStatusTest(host.setup);
+      expect(host.mounted).toHaveLength(0);
+      expect(host.quit).toHaveBeenCalledTimes(global ? 1 : 0);
+      if (!global) {
+        expect(host.setup.captureCharFrame()).toContain("Other worktrees");
+        await act(async () => host.setup.mockInput.pressKey("u"));
+        await settleStatusTest(host.setup);
+        expect(host.mounted).toHaveLength(1);
+      }
+    } finally {
+      finishClose?.();
+      await host.close();
+    }
+  });
+}
+
+for (const finishFirst of ["preparation", "cleanup", "shutdown"] as const) {
+  test(`Log return aborts and drains late preparation when ${finishFirst} finishes first`, async () => {
+    const runtime = createTestStatusRuntime();
+    const openHistory = runtime.openHistory;
+    const prepare = runtime.prepareHistoryReview;
+    let finishClose!: () => void;
+    let finishPrepare!: () => void;
+    let preparationSignal: AbortSignal | undefined;
+    const close = mock(
+      () =>
+        new Promise<void>((resolve) => {
+          finishClose = resolve;
+        }),
+    );
+    runtime.openHistory = async (path) => {
+      const history = await openHistory(path);
+      history.close = close;
+      return history;
+    };
+    runtime.prepareHistoryReview = mock(async (action, cwd, signal) => {
+      preparationSignal = signal;
+      await new Promise<void>((resolve) => {
+        finishPrepare = resolve;
+      });
+      // Deliberately ignore abort while returning the late prepared bootstrap.
+      return prepare(action, cwd);
+    });
+    const host = await createTestStatusHost(runtime);
+    try {
+      await act(async () => host.setup.mockInput.pressKey("l"));
+      await settleStatusTest(host.setup);
+      await act(async () => host.setup.mockInput.pressEnter());
+      await settleStatusTest(host.setup);
+      expect(runtime.prepareHistoryReview).toHaveBeenCalledTimes(1);
+      await act(async () => host.setup.mockInput.pressKey("q"));
+      await settleStatusTest(host.setup);
+      expect(preparationSignal?.aborted).toBe(true);
+      expect(close).toHaveBeenCalledTimes(1);
+      if (finishFirst === "shutdown") await act(async () => host.abort.abort());
+      await act(async () => {
+        if (finishFirst === "preparation") finishPrepare();
+        else finishClose();
+      });
+      await settleStatusTest(host.setup);
+      expect(host.setup.captureCharFrame()).not.toContain("Other worktrees");
+      expect(host.quit).not.toHaveBeenCalled();
+      await act(async () => {
+        host.setup.mockInput.pressKey("q");
+        host.setup.mockInput.pressEnter();
+      });
+      await settleStatusTest(host.setup);
+      expect(runtime.prepareHistoryReview).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        finishPrepare();
+        finishClose();
+      });
+      await settleStatusTest(host.setup);
+      expect(host.mounted).toHaveLength(0);
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(host.quit).toHaveBeenCalledTimes(finishFirst === "shutdown" ? 1 : 0);
+      if (finishFirst !== "shutdown") {
+        expect(host.setup.captureCharFrame()).toContain("Other worktrees");
+        await act(async () => host.setup.mockInput.pressKey("u"));
+        await settleStatusTest(host.setup);
+        expect(host.mounted).toHaveLength(1);
+      }
+    } finally {
+      finishPrepare?.();
+      finishClose?.();
+      await host.close();
+    }
+  });
+}

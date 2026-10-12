@@ -180,7 +180,7 @@ test("status labels color staging state, not modification type, in both themed a
   expect(plain).not.toContain("index:");
 });
 
-test("static groups retain every unique path without unusable expansion actions", () => {
+test("static groups retain every normalized path without unusable expansion actions", () => {
   const snapshot = createTestStatusSnapshot();
   snapshot.paths = Array.from({ length: 25 }, (_, i) => [
     {
@@ -196,7 +196,7 @@ test("static groups retain every unique path without unusable expansion actions"
       conflict: false,
     },
   ]).flat();
-  snapshot.paths.push(snapshot.paths[0]!);
+  snapshot.changedPathCount = snapshot.paths.length;
   const before = JSON.stringify(snapshot);
   const output = projectStaticStatus(snapshot);
   expect(output).toContain("50 changed paths\nTracked changes (25)");

@@ -33,6 +33,7 @@ import { StatusApp, type StatusOutcome } from "../status/StatusApp";
 import type { StatusController } from "../status/controller";
 import type { StatusRuntime } from "../status/types";
 import { applySessionViewPreferences } from "./viewPreferences";
+import { createPreparationTransaction } from "./preparationTransaction";
 
 export interface HistorySurfaceRoute {
   kind: "history";
@@ -152,7 +153,8 @@ function historyReviewDescriptor(
  * Route retained status/history and fresh review surfaces inside one stable React root.
  *
  * Workspace inspection, history selections and standalone review startup converge here. The host owns route preparation
- * and review-surface disposal; `runHunkSession` retains terminal ownership, while `AppHost` retains
+ * and review-surface disposal, draining preparation and cleanup before exposing a caller.
+ * `runHunkSession` retains terminal ownership, while `AppHost` retains
  * review reload and extension-event commit ordering.
  */
 export function HunkSessionHost({
@@ -204,10 +206,11 @@ export function HunkSessionHost({
   const routeRef = useRef(route);
   routeRef.current = route;
   const mountedRef = useRef(true);
-  const preparingRef = useRef(false);
-  const preparationControllerRef = useRef<AbortController | null>(null);
-  const preparationGenerationRef = useRef(0);
-  const preparationSettlementRef = useRef<Promise<void> | null>(null);
+  const [preparation] = useState(createPreparationTransaction);
+  const historyReturnRef = useRef<{
+    route: HistorySurfaceRoute;
+    settlement: Promise<void>;
+  } | null>(null);
   const nextInstanceRef = useRef(initialRoute.kind === "review" ? initialRoute.instanceId + 1 : 1);
   const quitRequestedRef = useRef(false);
   const shutdownPendingRef = useRef(false);
@@ -273,25 +276,29 @@ export function HunkSessionHost({
     (exitCode?: number) => {
       shutdownPendingRef.current = true;
       if (pendingExitCodeRef.current === undefined) pendingExitCodeRef.current = exitCode;
-      preparationGenerationRef.current += 1;
-      preparationControllerRef.current?.abort(
+      const drained = preparation.cancel(
         new Error("Hunk surface preparation was cancelled during shutdown."),
       );
       const current = routeRef.current;
       if (current.kind === "documents") {
         void current.controller.close().then(completeQuit);
-      } else if (current.kind !== "review" && !preparingRef.current) {
-        completeQuit();
+      } else if (current.kind !== "review") {
+        if (!preparation.pending && !historyReturnRef.current) completeQuit();
+        else void Promise.all([drained, historyReturnRef.current?.settlement]).then(completeQuit);
       }
     },
-    [completeQuit],
+    [completeQuit, preparation],
   );
 
   const retireReview = useCallback(() => {
     const current = routeRef.current;
     if (current.kind !== "review") return;
     stopReviewRuntime(current.runtime);
-    if (externalQuitSignal.aborted || current.quitBehavior === "quit-session") {
+    if (
+      externalQuitSignal.aborted ||
+      shutdownPendingRef.current ||
+      current.quitBehavior === "quit-session"
+    ) {
       completeQuit();
       return;
     }
@@ -308,25 +315,46 @@ export function HunkSessionHost({
     historyRoute: HistorySurfaceRoute,
     outcome: LogAppOutcome,
   ) => {
+    if (historyReturnRef.current?.route === historyRoute) {
+      await historyReturnRef.current.settlement;
+      return;
+    }
+    if (routeRef.current !== historyRoute) return;
     if (outcome.kind === "cancel-open-review") {
-      const settlement = preparationSettlementRef.current;
-      preparationGenerationRef.current += 1;
-      preparationControllerRef.current?.abort(
+      await preparation.cancel(
         new Error("Hunk review preparation was cancelled before a history quit decision."),
       );
-      await settlement;
       return;
     }
     if (outcome.kind === "quit") {
-      if (historyRoute.returnRoute && !externalQuitSignal.aborted && !shutdownPendingRef.current) {
-        await closeStatusHistory(historyRoute.controller, historyRoute.returnRoute.controller);
-        if (!mountedRef.current || routeRef.current !== historyRoute) return;
-        if (externalQuitSignal.aborted || shutdownPendingRef.current) {
-          completeQuit();
-          return;
-        }
-        routeRef.current = historyRoute.returnRoute;
-        setRoute(historyRoute.returnRoute);
+      const status = historyRoute.returnRoute;
+      if (status && !externalQuitSignal.aborted && !shutdownPendingRef.current) {
+        // Claim return before any await. Closing Log cannot open another review, and status
+        // cannot observe provider work or cleanup still owned by the departing route.
+        const returning = {
+          route: historyRoute,
+          settlement: Promise.resolve(),
+        };
+        historyReturnRef.current = returning;
+        const drained = preparation.cancel();
+        returning.settlement = (async () => {
+          await Promise.all([
+            drained,
+            closeStatusHistory(historyRoute.controller, status.controller),
+          ]);
+          if (
+            !mountedRef.current ||
+            routeRef.current !== historyRoute ||
+            externalQuitSignal.aborted ||
+            shutdownPendingRef.current
+          )
+            return;
+          routeRef.current = status;
+          setRoute(status);
+        })().finally(() => {
+          if (historyReturnRef.current === returning) historyReturnRef.current = null;
+        });
+        await returning.settlement;
         return;
       }
       requestQuit(outcome.exitCode);
@@ -336,21 +364,13 @@ export function HunkSessionHost({
       !mountedRef.current ||
       shutdownPendingRef.current ||
       externalQuitSignal.aborted ||
-      preparingRef.current ||
-      routeRef.current.kind !== "history"
+      preparation.pending ||
+      routeRef.current !== historyRoute
     ) {
       return;
     }
-    preparingRef.current = true;
-    let settlePreparation!: () => void;
-    const preparationSettlement = new Promise<void>((resolve) => {
-      settlePreparation = resolve;
-    });
-    preparationSettlementRef.current = preparationSettlement;
-    const generation = ++preparationGenerationRef.current;
-    const preparationController = new AbortController();
-    preparationControllerRef.current = preparationController;
-    const signal = AbortSignal.any([externalQuitSignal, preparationController.signal]);
+    const transaction = preparation.begin(externalQuitSignal);
+    const { signal } = transaction;
     const startupCwd = historyRoute.runtime.startupCwd ?? historyRoute.runtime.repoRoot;
     let plan: EmbeddedHistoryReview | undefined;
     try {
@@ -403,11 +423,7 @@ export function HunkSessionHost({
         throw new Error("Embedded review startup did not provide extension authority.");
       }
       signal.throwIfAborted();
-      if (
-        !mountedRef.current ||
-        generation !== preparationGenerationRef.current ||
-        routeRef.current !== historyRoute
-      ) {
+      if (!mountedRef.current || signal.aborted || routeRef.current !== historyRoute) {
         if (!plan.borrowsExtensions) {
           historyRoute.runtime.extensionSession.trackPrepared(plan.bootstrap.extensions);
           await historyRoute.runtime.extensionSession.retirePrepared(plan.bootstrap.extensions);
@@ -454,26 +470,14 @@ export function HunkSessionHost({
       }
       if (!signal.aborted) throw error;
     } finally {
-      if (preparationControllerRef.current === preparationController) {
-        preparationControllerRef.current = null;
-      }
-      preparingRef.current = false;
-      if (preparationSettlementRef.current === preparationSettlement) {
-        preparationSettlementRef.current = null;
-      }
-      settlePreparation();
-      if (shutdownPendingRef.current && routeRef.current.kind !== "review") {
-        completeQuit();
-      }
+      preparation.finish(transaction);
     }
   };
 
   /** Prepare status child routes with launch-owned extensions and inspected-target source facts. */
   const handleStatusOutcome = async (status: StatusSurfaceRoute, outcome: StatusOutcome) => {
     if (outcome.kind === "cancel-prepare") {
-      preparationGenerationRef.current++;
-      preparationControllerRef.current?.abort();
-      await preparationSettlementRef.current;
+      await preparation.cancel();
       return;
     }
     if (outcome.kind === "quit") {
@@ -484,20 +488,13 @@ export function HunkSessionHost({
       !mountedRef.current ||
       shutdownPendingRef.current ||
       externalQuitSignal.aborted ||
-      preparingRef.current ||
+      preparation.pending ||
+      historyReturnRef.current ||
       routeRef.current !== status
     )
       return;
-    preparingRef.current = true;
-    const generation = ++preparationGenerationRef.current;
-    const abort = new AbortController();
-    preparationControllerRef.current = abort;
-    const signal = AbortSignal.any([abort.signal, externalQuitSignal]);
-    let settle!: () => void;
-    const settlement = new Promise<void>((resolve) => {
-      settle = resolve;
-    });
-    preparationSettlementRef.current = settlement;
+    const transaction = preparation.begin(externalQuitSignal);
+    const { signal } = transaction;
     let history: LogController | undefined;
     let historyClosing: Promise<void> | undefined;
     const cancelHistory = () => {
@@ -517,12 +514,7 @@ export function HunkSessionHost({
         signal.throwIfAborted();
         await history.loadMore();
         signal.throwIfAborted();
-        if (
-          !mountedRef.current ||
-          generation !== preparationGenerationRef.current ||
-          routeRef.current !== status
-        )
-          return;
+        if (!mountedRef.current || signal.aborted || routeRef.current !== status) return;
         const next: HistorySurfaceRoute = {
           kind: "history",
           runtime,
@@ -553,12 +545,7 @@ export function HunkSessionHost({
           throw new Error("An embedded review cannot replace the owning extension session.");
         }
         signal.throwIfAborted();
-        if (
-          !mountedRef.current ||
-          generation !== preparationGenerationRef.current ||
-          routeRef.current !== status
-        )
-          return;
+        if (!mountedRef.current || signal.aborted || routeRef.current !== status) return;
         const reviewBootstrap = applySessionViewPreferences(bootstrap, {
           ...sessionViewPreferencesRef.current,
           theme: themeController.getSnapshot().themeId,
@@ -587,13 +574,13 @@ export function HunkSessionHost({
         await historyClosing;
       } finally {
         // Cleanup errors must never strand a cancelling caller or global shutdown.
-        if (preparationControllerRef.current === abort) preparationControllerRef.current = null;
-        preparingRef.current = false;
-        if (preparationSettlementRef.current === settlement)
-          preparationSettlementRef.current = null;
-        settle();
-        if (shutdownPendingRef.current && routeRef.current.kind !== "review") completeQuit();
-        else if (mountedRef.current && routeRef.current === status && !externalQuitSignal.aborted)
+        preparation.finish(transaction);
+        if (
+          mountedRef.current &&
+          routeRef.current === status &&
+          !shutdownPendingRef.current &&
+          !externalQuitSignal.aborted
+        )
           status.controller.resume();
       }
     }
@@ -612,10 +599,7 @@ export function HunkSessionHost({
   useEffect(
     () => () => {
       mountedRef.current = false;
-      preparationGenerationRef.current += 1;
-      preparationControllerRef.current?.abort(
-        new Error("Hunk session host unmounted during surface preparation."),
-      );
+      void preparation.cancel(new Error("Hunk session host unmounted during surface preparation."));
       const current = routeRef.current;
       if (current.kind === "review") stopReviewRuntime(current.runtime);
       const history =
@@ -628,7 +612,7 @@ export function HunkSessionHost({
         void closeStatusHistory(history.controller, history.returnRoute.controller);
       for (const runtime of failedReviewStopsRef.current) stopReviewRuntime(runtime);
     },
-    [stopReviewRuntime, closeStatusHistory],
+    [stopReviewRuntime, closeStatusHistory, preparation],
   );
 
   if (route.kind === "documents") {
@@ -657,6 +641,10 @@ export function HunkSessionHost({
         {...(route.mountMode === "dynamic" ? { onFirstFrameReady: () => undefined } : {})}
         returnToSurface={route.returnRoute?.kind}
         initialFilePath={route.initialFilePath}
+        retainLaunchConfig={
+          route.returnRoute?.kind === "status" ||
+          (route.returnRoute?.kind === "history" && Boolean(route.returnRoute.returnRoute))
+        }
         sessionCustomThemes={
           route.returnRoute?.kind === "status" ||
           (route.returnRoute?.kind === "history" && route.returnRoute.returnRoute)

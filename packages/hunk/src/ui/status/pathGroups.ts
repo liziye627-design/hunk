@@ -3,14 +3,11 @@ import type { ExtensionVcsStatusPath } from "../../extension-api/types";
 export type StatusPathGroupId = "tracked" | "untracked";
 export const STATUS_PATH_GROUP_LIMIT = 10;
 
-/** Group unique destination paths without changing their provider/stable order within each group. */
+/** Group normalized paths in provider/stable order; the VCS boundary validates uniqueness. */
 export function groupStatusPaths(paths: readonly ExtensionVcsStatusPath[]) {
   const tracked: ExtensionVcsStatusPath[] = [];
   const untracked: ExtensionVcsStatusPath[] = [];
-  const seen = new Set<string>();
   for (const path of paths) {
-    if (seen.has(path.path)) continue;
-    seen.add(path.path);
     const isUntracked =
       path.worktree === "untracked" &&
       (!path.index || path.index === "unchanged") &&

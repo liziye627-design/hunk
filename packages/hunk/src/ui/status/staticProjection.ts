@@ -156,7 +156,7 @@ export function projectStaticStatus(
   const paintSpans = (spans: StatusTextSpan[]) =>
     spans.map((span) => paint(span.text, span.role)).join("");
   const groups = groupStatusPaths(snapshot.paths);
-  const changedPathCount = groups.reduce((count, group) => count + group.paths.length, 0);
+  const changedPathCount = snapshot.changedPathCount;
   const head = snapshot.head;
   const label =
     head.kind === "detached"

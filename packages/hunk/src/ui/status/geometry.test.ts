@@ -1,9 +1,18 @@
 import { expect, test } from "bun:test";
 import { createTestStatusRuntime } from "../../../../../test/helpers/status-runtime";
 import { StatusController } from "./controller";
-import { moveStatusFocus, planStatusViewport, projectStatusRows } from "./geometry";
+import {
+  createStatusGeometryCache,
+  measureStatusRows,
+  moveStatusFocus,
+  planStatusViewport,
+  projectStatusRows,
+  type StatusRow,
+} from "./geometry";
 import { statusPlainText } from "./staticProjection";
 import { measureTextWidth } from "../lib/text";
+import { normalizeVcsStatusSnapshot } from "../../extensions/vcsStatus";
+import { projectStaticStatus } from "./staticProjection";
 
 test("wide and narrow rows expose mixed states without selection-dependent metadata", () => {
   const runtime = createTestStatusRuntime();
@@ -40,7 +49,7 @@ test("wide and narrow rows expose mixed states without selection-dependent metad
 test("short viewport retains focused row and bounded expansion stays in the same row stream", () => {
   const controller = new StatusController(createTestStatusRuntime());
   const rows = projectStatusRows(controller.getSnapshot(), 60);
-  const viewport = planStatusViewport(rows, "path:beta.ts", 0, 2);
+  const viewport = planStatusViewport(measureStatusRows(rows), "path:beta.ts", 0, 2);
   expect(viewport.lines.some((line) => line.row.id === "path:beta.ts")).toBe(true);
   expect(viewport.lines.length).toBeLessThanOrEqual(2);
 });
@@ -53,19 +62,20 @@ test("oversized focused rows retain intra-row scrolling through resize and reach
       lines: Array.from({ length: 20 }, (_, i) => [{ text: String(i), role: "text" as const }]),
     },
   ];
-  expect(planStatusViewport(rows, "long", 8, 3).top).toBe(8);
-  expect(planStatusViewport(rows, "long", 18, 3).lines.map((line) => line.text)).toEqual([
+  const geometry = measureStatusRows(rows);
+  expect(planStatusViewport(geometry, "long", 8, 3).top).toBe(8);
+  expect(planStatusViewport(geometry, "long", 18, 3).lines.map((line) => line.text)).toEqual([
     "17",
     "18",
     "19",
   ]);
-  expect(planStatusViewport(rows, "long", 8, 6).top).toBe(8);
+  expect(planStatusViewport(geometry, "long", 8, 6).top).toBe(8);
   let position = { selected: "long" as string | null, top: 0 };
   for (let i = 0; i < 20; i++)
-    position = moveStatusFocus(rows, position.selected, position.top, 3, 1);
+    position = moveStatusFocus(geometry, position.selected, position.top, 3, 1);
   expect(position).toEqual({ selected: "long", top: 17 });
   for (let i = 0; i < 6; i++)
-    position = moveStatusFocus(rows, position.selected, position.top, 3, -3);
+    position = moveStatusFocus(geometry, position.selected, position.top, 3, -3);
   expect(position).toEqual({ selected: "long", top: 0 });
 });
 
@@ -146,8 +156,7 @@ for (const tracked of [0, 1, 10, 11, 25]) {
           conflict: false,
         })),
       ];
-      // Duplicate destinations cannot inflate a group count or consume its visible record cap.
-      if (runtime.snapshot.paths[0]) runtime.snapshot.paths.push(runtime.snapshot.paths[0]);
+      runtime.snapshot.changedPathCount = tracked + untracked;
       const controller = new StatusController(runtime);
       const rows = () => projectStatusRows(controller.getSnapshot(), 22);
       const paths = () => rows().filter((row) => row.kind === "path");
@@ -180,6 +189,166 @@ for (const tracked of [0, 1, 10, 11, 25]) {
   }
 }
 
+test("large expanded content is measured only when content, expansion or width changes", () => {
+  const runtime = createTestStatusRuntime();
+  runtime.snapshot.paths = Array.from({ length: 20_000 }, (_, index) => ({
+    path: `nested/${index}/a-long-name-with-wrapped-facts.ts`,
+    index: "modified",
+    worktree: "modified",
+    conflict: false,
+  }));
+  runtime.snapshot.changedPathCount = runtime.snapshot.paths.length;
+  const controller = new StatusController(runtime);
+  controller.togglePathGroup("tracked");
+  let projections = 0;
+  let measuredRows = 0;
+  const cache = createStatusGeometryCache((state, width) => {
+    projections++;
+    const rows = projectStatusRows(state, width);
+    measuredRows += rows.length;
+    return rows;
+  });
+  const initial = cache.get(controller.getSnapshot(), 32);
+  expect(initial.total).toBeGreaterThan(60_000);
+  const initialWork = measuredRows;
+
+  for (let step = 0; step < 100; step++) {
+    const current = controller.getSnapshot();
+    const next = moveStatusFocus(initial, current.selected, current.top, 10, 1);
+    controller.select(next.selected, next.top);
+    controller.setNotice(`Notice ${step}`);
+    const state = controller.getSnapshot();
+    expect(cache.get({ ...state, loading: true, siblingsLoading: true }, 32)).toBe(initial);
+    expect(
+      cache.get({ ...state, snapshot: { ...state.snapshot, observedAt: "new observation" } }, 32),
+    ).toBe(initial);
+    expect(planStatusViewport(initial, next.selected, next.top, 10).lines).toHaveLength(10);
+  }
+  expect(projections).toBe(1);
+  expect(measuredRows).toBe(initialWork);
+
+  expect(cache.get(controller.getSnapshot(), 80)).not.toBe(initial);
+  expect(projections).toBe(2);
+  controller.togglePathGroup("tracked");
+  const collapsed = cache.get(controller.getSnapshot(), 80);
+  expect(collapsed.rows.filter((row) => row.kind === "path")).toHaveLength(10);
+  expect(projections).toBe(3);
+  controller.toggleWorktrees();
+  cache.get(controller.getSnapshot(), 80);
+  expect(projections).toBe(4);
+  const state = controller.getSnapshot();
+  const changedPaths = {
+    ...state,
+    snapshot: { ...state.snapshot, paths: [...state.snapshot.paths] },
+  };
+  cache.get(changedPaths, 80);
+  expect(projections).toBe(5);
+  cache.get(
+    { ...changedPaths, snapshot: { ...changedPaths.snapshot, siblings: { state: "loading" } } },
+    80,
+  );
+  expect(projections).toBe(6);
+});
+
+test("large viewport seeks logarithmically and reads text only for visible lines, never on movement", () => {
+  let textReads = 0;
+  let rowReads = 0;
+  const rows: StatusRow[] = Array.from({ length: 20_000 }, (_, index) => {
+    const lines = Array.from({ length: 20 }, (_, line) => [
+      {
+        get text() {
+          textReads++;
+          return `${index}:${line}`;
+        },
+        role: "text" as const,
+      },
+    ]);
+    return {
+      id: `path:${index}`,
+      kind: "path",
+      get lines() {
+        rowReads++;
+        return lines;
+      },
+    };
+  });
+  const geometry = measureStatusRows(rows);
+  textReads = 0;
+  rowReads = 0;
+  const viewport = planStatusViewport(geometry, "path:19999", 399_990, 7);
+  expect(viewport.lines.map((line) => line.text)).toEqual(
+    Array.from({ length: 7 }, (_, line) => `19999:${line + 10}`),
+  );
+  expect(viewport.lines.map((line) => line.offset)).toEqual(
+    Array.from({ length: 7 }, (_, line) => 399_990 + line),
+  );
+  expect(textReads).toBe(7);
+  expect(rowReads).toBeLessThanOrEqual(Math.ceil(Math.log2(rows.length)) + 10);
+
+  textReads = 0;
+  rowReads = 0;
+  const moved = moveStatusFocus(geometry, "path:19999", viewport.top, 7, 1);
+  expect(moved).toEqual({ selected: "path:19999", top: 399_991 });
+  expect(textReads).toBe(0);
+  expect(rowReads).toBeLessThanOrEqual(4);
+  expect(planStatusViewport(geometry, moved.selected, moved.top, 7).lines).toHaveLength(7);
+  expect(textReads).toBe(7);
+
+  textReads = 0;
+  rowReads = 0;
+  expect(moveStatusFocus(geometry, "path:10000", 200_013, 7, 1)).toEqual({
+    selected: "path:10001",
+    top: 200_020,
+  });
+  expect(textReads).toBe(0);
+  expect(rowReads).toBeLessThanOrEqual(4);
+  expect(planStatusViewport(geometry, null, 200_018, 7).lines.map((line) => line.text)).toEqual([
+    "10000:18",
+    "10000:19",
+    "10001:0",
+    "10001:1",
+    "10001:2",
+    "10001:3",
+    "10001:4",
+  ]);
+  expect(textReads).toBe(7);
+});
+
+test("normalized JSON, static and expanded interactive groups retain the same path counts", () => {
+  const runtime = createTestStatusRuntime();
+  runtime.snapshot.paths = Array.from({ length: 30 }, (_, index) => ({
+    path: `file-${index}`,
+    index: "unchanged",
+    worktree: index % 2 ? "untracked" : "modified",
+    conflict: false,
+  }));
+  runtime.snapshot.changedPathCount = runtime.snapshot.paths.length;
+  runtime.snapshot = normalizeVcsStatusSnapshot(runtime.snapshot);
+  const controller = new StatusController(runtime);
+  controller.togglePathGroup("tracked");
+  controller.togglePathGroup("untracked");
+  const rows = projectStatusRows(controller.getSnapshot(), 120);
+  const json = JSON.parse(JSON.stringify(runtime.snapshot));
+  expect(
+    rows
+      .filter((row) => row.kind === "path")
+      .map((row) => row.id)
+      .sort(),
+  ).toEqual(json.paths.map((path: { path: string }) => `path:${path.path}`).sort());
+  const staticText = projectStaticStatus(runtime.snapshot);
+  for (const heading of ["30 changed paths", "Tracked changes (15)", "Untracked files (15)"]) {
+    expect(staticText).toContain(heading);
+    expect(rows.some((row) => row.lines.map(statusPlainText).join("") === heading)).toBe(true);
+  }
+  expect(() =>
+    normalizeVcsStatusSnapshot({
+      ...runtime.snapshot,
+      paths: [...runtime.snapshot.paths, runtime.snapshot.paths[0]],
+      changedPathCount: 31,
+    }),
+  ).toThrow("unique changed paths");
+});
+
 test("collapsing a selected hidden path focuses its toggle and reconciles the viewport", () => {
   const runtime = createTestStatusRuntime();
   runtime.snapshot.paths = Array.from({ length: 25 }, (_, i) => ({
@@ -195,7 +364,7 @@ test("collapsing a selected hidden path focuses its toggle and reconciles the vi
   const state = controller.getSnapshot();
   expect(state.selected).toBe("toggle:tracked");
   const rows = projectStatusRows(state, 45);
-  const viewport = planStatusViewport(rows, state.selected, state.top, 8);
+  const viewport = planStatusViewport(measureStatusRows(rows), state.selected, state.top, 8);
   expect(viewport.top).toBeLessThan(100);
   expect(viewport.lines.some((line) => line.text.includes("and 15 more files"))).toBe(true);
   expect(rows.some((row) => row.id === "path:file-24.ts")).toBe(false);

@@ -130,6 +130,30 @@ version 25. Declare `{"hunk": {"apiVersion": 25}}` in the manifest, or branch on
 `hunk.apiVersion` and return signatures synchronously on older hosts. Use async
 I/O and honor `ctx.signal` on API 25; existing synchronous hooks remain supported.
 
+### Workspace status providers (API 31)
+
+The optional `registerVcsAdapter({ status })` capability offers cancellable, read-only
+`read`, `readSiblings`, and `planReview` operations, plus optional async `watchPlan`.
+Read [Workspace status capability](../../../../docs/extensions.md#workspace-status-capability)
+and the `ExtensionVcsStatusCapability` contract before implementing it.
+
+- Action ids are supported semantic ids, not opaque strings: `staged` reviews the index;
+  `unstaged` reviews the working copy. Offer each at most once with provider-owned labels.
+  A no-index provider offers only `unstaged` and omits `paths[].index`.
+- Return `{ cwd, input: ExtensionVcsStatusReviewInput }` from `planReview`. Preserve the
+  inspected target and opaque token validation. This exported type excludes pathspecs while
+  preserving exclusive `range` / `rangeEndpoints` comparisons. Any `pathspecs` field, even
+  `[]` or `undefined`, rejects; `input.staged` must match the offered action id.
+- Sibling ids and paths must each be unique and share the current `repositoryId`. If a row
+  matches the current worktree's id or path, both must match. Embedded ready sibling facts
+  and `readSiblings` results follow the same checks; unavailable/error rows never mean clean.
+- Bound collections before returning: 20,000 changed paths, 100 sibling rows, five operations,
+  256 watch targets, four sources per target, 20,000 watch roots/entries per target, and
+  40,000 aggregate collection entries per result (including nested and outer arrays).
+  Defensive action-array validation caps at 32, but only two unique ids are supported.
+  Oversized results reject before per-element schema traversal. Mark bounded sibling scans
+  `truncated`; honor `context.signal`, bound I/O, and reap subprocesses.
+
 ### Generic CLI handlers
 
 Register one lowercase-kebab top-level token; the handler owns every raw token

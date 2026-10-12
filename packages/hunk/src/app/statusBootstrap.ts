@@ -25,6 +25,7 @@ import type { HistoryBootstrap } from "./historyBootstrap";
 import { loadConfiguredSessionBootstrap } from "./sessionBootstrap";
 import { openVcsHistory, planVcsHistoryReview, planVcsHistoryRangeReview } from "../core/vcs";
 import { resolveConfiguredExtensions } from "./extensionBootstrap";
+import { createHistoryCursorLifecycle } from "./historyCursorLifecycle";
 
 /** Retain launch config/trust authority while status targets and mounted review routes change. */
 export interface StatusBootstrap {
@@ -238,12 +239,12 @@ export async function loadStatusBootstrap({
             const targetCwd = current.worktree.path;
             const open = (signal?: AbortSignal) =>
               openVcsHistory(adapter, {}, { cwd: targetCwd, signal }, catalog);
-            let source = await open(active);
+            const source = await open(active);
             if (active.aborted) {
               await source.close();
               active.throwIfAborted();
             }
-            let closed = false;
+            const cursor = createHistoryCursorLifecycle(source, open);
             return {
               input: {
                 kind: "history",
@@ -279,24 +280,8 @@ export async function loadStatusBootstrap({
                       ),
                   }
                 : {}),
-              async reopenSource(signal) {
-                if (closed) throw new Error("History session is closed.");
-                const previous = source;
-                const replacement = await open(signal);
-                if (closed || source !== previous || signal?.aborted) {
-                  await replacement.close();
-                  throw new Error("History session changed while refreshing.");
-                }
-                source = replacement;
-                await previous.close();
-                return replacement;
-              },
-              async close() {
-                if (!closed) {
-                  closed = true;
-                  await source.close();
-                }
-              },
+              reopenSource: cursor.reopenSource,
+              close: cursor.close,
             } satisfies HistoryBootstrap;
           },
           (history) => history.close(),

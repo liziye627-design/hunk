@@ -14,7 +14,7 @@ function createTestStatusBootstrapFixture() {
   const configPath = join(configHome, "hunk", "config.toml");
   writeFileSync(
     configPath,
-    'theme = "nord"\nline_numbers = false\nwrap = true\nprompt_save_view_preferences = false\n\n[keybindings]\n"hunk.history.nextCommit" = "ctrl+n"\n',
+    'theme = "nord"\nline_numbers = false\nwrap_lines = true\nprompt_save_view_preferences = false\n\n[keybindings]\n"hunk.history.nextCommit" = "ctrl+n"\n',
   );
   const adapter: VcsAdapter = {
     id: "test",
@@ -111,6 +111,47 @@ describe("status bootstrap launch authority", () => {
       fixture.cleanup();
     }
   });
+
+  test("prepared reviews retain frozen config/keybindings while caller overrides and source cwd stay independent", async () => {
+    const fixture = createTestStatusBootstrapFixture();
+    const bootstrap = await fixture.load();
+    const target = join(fixture.cwd, "sibling");
+    mkdirSync(target);
+    try {
+      writeFileSync(
+        fixture.configPath,
+        'line_numbers = true\nwrap_lines = false\n\n[keybindings]\n"hunk.history.nextCommit" = false\n',
+      );
+      const review = await bootstrap.prepareReview(
+        {
+          kind: "patch",
+          text: "diff --git a/example.txt b/example.txt\n--- a/example.txt\n+++ b/example.txt\n@@ -1 +1 @@\n-old\n+new\n",
+          options: { pager: false, tabWidth: 6, excludeUntracked: false },
+        },
+        target,
+      );
+      expect(review.reloadContext.cwd).toBe(target);
+      expect(review.input.options).toMatchObject({
+        experimental: true,
+        extensions: false,
+        theme: "github-light-default",
+        lineNumbers: false,
+        wrapLines: true,
+        tabWidth: 6,
+        excludeUntracked: false,
+      });
+      expect(review.keybindings).toEqual({ "hunk.history.nextCommit": "ctrl+n" });
+      expect(review.viewPreferencesConfigPath).toBe(bootstrap.viewPreferencesConfigPath);
+      expect(review.extensions).toBe(bootstrap.extensionSession.current);
+      expect(bootstrap.startupCwd).toBe(fixture.cwd);
+      expect(bootstrap.launchOptions.tabWidth).not.toBe(6);
+    } finally {
+      await bootstrap.close();
+      await bootstrap.extensionSession.shutdown();
+      fixture.cleanup();
+    }
+  });
+
   test("contains sibling enumeration failure and drains reads cancelled at session close", async () => {
     const fixture = createTestStatusBootstrapFixture();
     fixture.adapter.status!.readSiblings = async () => {
@@ -139,6 +180,7 @@ describe("status bootstrap launch authority", () => {
       fixture.cleanup();
     }
   });
+
   test("reports unsupported providers rather than substituting Git index semantics", async () => {
     const fixture = createTestStatusBootstrapFixture();
     delete fixture.adapter.status;

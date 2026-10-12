@@ -13,9 +13,11 @@ labels provide the same actions with a mouse; double-click a path or sibling to 
 
 Q returns from diff to its caller, from Log to status, or from an inspected sibling to its origin;
 at the root it quits. Escape/Backspace also return from sibling inspection. Pending preparation
-can be cancelled with Q; failures leave the caller usable. Cleanup failures while returning from
-Log are reported on status without requiring a second Q or blocking shutdown. Ctrl-C and OS shutdown signals end the
-whole session. These journeys share one renderer, the ordinary Pierre-backed multi-file review
+can be cancelled with Q; failures leave the caller usable. Returning from Log immediately excludes
+new review opens and coalesces repeated returns. Pending preparation is aborted and drained together
+with history cleanup before status becomes usable; a shutdown during that transition waits for both
+and ends the session instead of exposing status. Cleanup failures are reported on status without
+requiring a second Q or blocking shutdown. Ctrl-C and OS shutdown signals end the whole session. These journeys share one renderer, the ordinary Pierre-backed multi-file review
 stream and the existing Log, not nested terminal applications. Selection and scrolling survive
 returns and refresh. Narrow terminals stack path facts rather than adding a file inspector;
 arrow/page keys and the mouse wheel scroll within a row taller than the viewport before moving
@@ -26,7 +28,10 @@ bootstrap retains one ExtensionSession, launch options, keybindings, session ini
 view-preference baseline. Inspecting another worktree changes only the provider's explicit target;
 it does not load or auto-trust that sibling's extensions or change the shell cwd. Custom palettes,
 keybindings and experimental launch opt-ins remain owned by the launch session, including during
-review reloads. The resolved transparent-background preference also spans status, Log and diff
+manual, watch and bare broker review reloads. Reloads do not rediscover config at the inspected source
+cwd: source cwd can change independently within the review's existing reload bounds. Effective caller
+option overrides (including an explicit untracked-row open) and live session view preferences survive
+reloads, while review publication still uses the ordinary AppHost commit gate. The resolved transparent-background preference also spans status, Log and diff
 through the shared surface-theme derivation. Theme and review preference changes seed later reviews opened directly or through
 Log, and the root status surface owns the normal save-preferences prompt. Only a mounted review
 registers with the session broker; its source and cwd refer to the inspected target.

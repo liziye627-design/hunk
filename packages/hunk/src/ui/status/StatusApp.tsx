@@ -2,8 +2,9 @@ import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { PersistedViewPreferences } from "../../core/run/config";
 import { APP_COMMAND_NAMES } from "../../core/run/commandCatalog";
-import { HISTORY_COMMAND_CATALOG } from "../../core/run/historyCommandCatalog";
-import { resolveExtensionCommands, resolveExtensionSessionOptions } from "../../extensions/apply";
+import { HISTORY_COMMAND_NAMES } from "../../core/run/historyCommandCatalog";
+import { DOCUMENT_COMMAND_NAMES } from "../../core/run/documentCommandCatalog";
+import { resolveExtensionSessionOptions } from "../../extensions/apply";
 import { MenuBar } from "../components/chrome/MenuBar";
 import { MenuDropdown } from "../components/chrome/MenuDropdown";
 import type { AppMenus, MenuEntry } from "../components/chrome/menu";
@@ -18,13 +19,14 @@ import { useMenuController } from "../hooks/useMenuController";
 import { useThemeSelectorController } from "../hooks/useThemeSelectorController";
 import { dispatchAppCommand, executeAppCommand } from "../lib/appCommands";
 import { resolveCommandKeys } from "../lib/keymap";
+import { buildSessionCommands } from "../lib/sessionRegistrations";
 import { fitText } from "../lib/text";
 import { handleViewPreferenceQuitPromptKey } from "../lib/viewPreferenceQuitKeys";
 import { interactiveLogUsesColor, monochromeLogTheme } from "../log/colorPolicy";
 import type { ThemeController } from "../theme/controller";
 import { STATUS_COMMANDS, buildStatusCommands, type StatusCommandId } from "./commands";
 import type { StatusController } from "./controller";
-import { moveStatusFocus, planStatusViewport, projectStatusRows } from "./geometry";
+import { createStatusGeometryCache, moveStatusFocus, planStatusViewport } from "./geometry";
 import { formatStatusUpstream, statusDisplayText, statusTextColor } from "./staticProjection";
 import type { StatusRuntime } from "./types";
 
@@ -94,9 +96,12 @@ export function StatusApp({
     quitScheduler,
   });
   const snapshot = state.snapshot;
-  const rows = useMemo(() => projectStatusRows(state, terminal.width), [state, terminal.width]);
-  const navigable = rows.filter((row) => row.kind !== "heading");
-  const selected = rows.find((row) => row.id === state.selected);
+  const geometryCache = useRef<ReturnType<typeof createStatusGeometryCache> | null>(null);
+  if (!geometryCache.current) geometryCache.current = createStatusGeometryCache();
+  const geometry = geometryCache.current.get(state, terminal.width);
+  const { navigable } = geometry;
+  const selectedIndex = state.selected === null ? undefined : geometry.byId.get(state.selected);
+  const selected = selectedIndex === undefined ? undefined : geometry.rows[selectedIndex];
   const hasAction = (id: string) => snapshot.reviewActions.some((action) => action.id === id);
   const open = async (outcome: StatusOutcome) => {
     if (pendingRef.current) return;
@@ -124,9 +129,9 @@ export function StatusApp({
   };
   const openSelection = () => {
     const current = controller.getSnapshot();
-    const visible = projectStatusRows(current, terminal.width).find(
-      (row) => row.id === current.selected,
-    );
+    const measured = geometryCache.current!.get(current, terminal.width);
+    const index = current.selected === null ? undefined : measured.byId.get(current.selected);
+    const visible = index === undefined ? undefined : measured.rows[index];
     if (!visible || visible.disabled) return;
     if (visible.group) {
       controller.togglePathGroup(visible.group);
@@ -142,17 +147,25 @@ export function StatusApp({
       const path = snapshot.paths.find((path) => `path:${path.path}` === id);
       if (!path) return;
       const action =
-        path?.worktree !== "unchanged" && hasAction("unstaged")
+        path.worktree !== "unchanged" && hasAction("unstaged")
           ? "unstaged"
           : hasAction("staged")
             ? "staged"
-            : snapshot.reviewActions[0]?.id;
-      if (action) void open({ kind: "open-review", actionId: action, filePath: path?.path });
+            : hasAction("unstaged")
+              ? "unstaged"
+              : undefined;
+      if (action) void open({ kind: "open-review", actionId: action, filePath: path.path });
     }
   };
   const move = (delta: number) => {
     const current = controller.getSnapshot();
-    const next = moveStatusFocus(rows, current.selected, current.top, bodyHeight, delta);
+    const next = moveStatusFocus(
+      geometryCache.current!.get(current, terminal.width),
+      current.selected,
+      current.top,
+      bodyHeight,
+      delta,
+    );
     controller.select(next.selected, next.top);
   };
   const requestBack = async () => {
@@ -171,8 +184,9 @@ export function StatusApp({
         defaults: STATUS_COMMANDS,
         inactiveCommandNames: new Set([
           ...APP_COMMAND_NAMES,
-          ...HISTORY_COMMAND_CATALOG.map((entry) => entry.id),
-          ...resolveExtensionCommands(runtime.extensionSession.current.registry).commands.map(
+          ...HISTORY_COMMAND_NAMES,
+          ...DOCUMENT_COMMAND_NAMES,
+          ...buildSessionCommands(runtime.extensionSession.current.registry).map(
             (entry) => `${entry.extensionId}.${entry.command.id}`,
           ),
         ]),
@@ -282,7 +296,14 @@ export function StatusApp({
     snapshot.operations.state === "ready"
       ? snapshot.operations.value.join(" · ")
       : "Operation state unavailable";
-  const conflicts = snapshot.paths.filter((path) => path.conflict).length;
+  const conflicts = useMemo(
+    () => snapshot.paths.filter((path) => path.conflict).length,
+    [snapshot.paths],
+  );
+  const hasIndexState = useMemo(
+    () => snapshot.paths.some((path) => path.index !== undefined),
+    [snapshot.paths],
+  );
   const interruption = [
     operation,
     conflicts ? `${conflicts} conflicted path${conflicts === 1 ? "" : "s"}` : "",
@@ -292,14 +313,15 @@ export function StatusApp({
   const menuVisible = preferences.showMenuBar || Boolean(menu.activeMenuId);
   const headerHeight = (menuVisible ? 1 : 0) + 3 + (interruption ? 1 : 0);
   const bodyHeight = Math.max(1, terminal.height - headerHeight - 1);
-  const viewport = planStatusViewport(rows, state.selected, state.top, bodyHeight);
+  const viewport = planStatusViewport(geometry, state.selected, state.top, bodyHeight);
   useEffect(() => {
-    const chosen = navigable.some((row) => row.id === state.selected)
-      ? state.selected
-      : (navigable[0]?.id ?? null);
+    const chosen =
+      state.selected !== null && geometry.navigationIndex.has(state.selected)
+        ? state.selected
+        : (navigable[0]?.id ?? null);
     if (chosen !== state.selected || viewport.top !== state.top)
       controller.select(chosen, viewport.top);
-  }, [controller, navigable, state.selected, state.top, viewport.top]);
+  }, [controller, geometry, navigable, state.selected, state.top, viewport.top]);
   useKeyboard((key) => {
     const consume = () => {
       key.preventDefault();
@@ -389,7 +411,9 @@ export function StatusApp({
             }}
           >
             {statusDisplayText(
-              terminal.width < 65 && (action.id === "staged" || action.id === "unstaged")
+              terminal.width < 65 &&
+                hasIndexState &&
+                (action.id === "staged" || action.id === "unstaged")
                 ? action.id === "staged"
                   ? "Staged"
                   : "Unstaged"

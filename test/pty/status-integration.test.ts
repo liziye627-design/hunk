@@ -149,7 +149,7 @@ test("narrow/short resize, edit refresh and sibling inspect/back preserve the si
   }
 });
 
-test("launch custom themes survive sibling manual/watch reloads and reopening through log", async () => {
+test("launch config and custom themes survive invalid sibling config during manual/watch reloads and Log", async () => {
   const { cwd, sibling } = createStatusPtyTestRepo();
   mkdirSync(join(cwd, ".hunk"));
   mkdirSync(join(sibling, ".hunk"));
@@ -158,7 +158,8 @@ test("launch custom themes survive sibling manual/watch reloads and reopening th
     join(cwd, ".hunk", "config.toml"),
     'theme = "launch-custom"\nwatch = true\nprompt_save_view_preferences = false\n\n[themes.launch-custom]\nlabel = "Launch custom"\naccent = "#123456"\n',
   );
-  writeFileSync(join(sibling, ".hunk", "config.toml"), 'theme = "nord"\n');
+  // Source selection must not make the sibling an authority for launch configuration.
+  writeFileSync(join(sibling, ".hunk", "config.toml"), 'theme = "nord"\ntab_width = 0\n');
   writeFileSync(join(sibling, "alpha.ts"), "export const statusAlpha = 8;\n");
   const session = await harness.launchHunk({
     cwd,
@@ -367,6 +368,8 @@ test("enabled trusted launch extensions span real broker-mounted sibling reviews
   mkdirSync(join(cwd, ".hunk", "extensions"), { recursive: true });
   mkdirSync(join(sibling, ".hunk", "extensions"), { recursive: true });
   writeFileSync(join(cwd, ".git", "info", "exclude"), ".hunk/\n");
+  writeFileSync(join(cwd, ".hunk", "config.toml"), "tab_width = 6\n");
+  writeFileSync(join(sibling, ".hunk", "config.toml"), "tab_width = 0\n");
   writeFileSync(
     join(cwd, ".hunk", "extensions", "owned.ts"),
     `
@@ -458,6 +461,11 @@ test("enabled trusted launch extensions span real broker-mounted sibling reviews
       side: "new",
       line: 1,
     });
+    // A bare remote reload changes source facts, not the launch config or trusted registry.
+    writeFileSync(join(sibling, "alpha.ts"), "export const siblingBrokerTarget = 43;\n");
+    cli(["reload", mounted.sessionId, "--json", "--", "diff"]);
+    await session.waitForText(/siblingBrokerTarget = 43/, { timeout: 15_000 });
+    expect(readFileSync(events, "utf8")).toBe("factory\nstartup\n");
     await session.press("q");
     await session.waitForText(/Other worktrees/, { timeout: 15_000 });
     await waitStatusPtyTestFact(() =>

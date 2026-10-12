@@ -990,6 +990,7 @@ export interface ExtensionVcsStatusWorktreeSummary {
 }
 
 export interface ExtensionVcsStatusSiblings {
+  /** Unique worktree ids and paths, all sharing the inspected repositoryId. */
   worktrees: ExtensionVcsStatusWorktreeSummary[];
   /** More worktrees exist than the bounded scan returned. */
   truncated: boolean;
@@ -1008,9 +1009,26 @@ export interface ExtensionVcsStatusSnapshot {
   paths: ExtensionVcsStatusPath[];
   /** Unique destination paths, not overlapping index/worktree group totals. */
   changedPathCount: number;
-  reviewActions: { id: string; label: string }[];
+  /**
+   * Offer only supported semantic ids: "staged" (index comparison) and "unstaged"
+   * (working-copy comparison). Labels are provider-owned. Providers without an
+   * index offer only "unstaged" and omit paths[].index; ids are not opaque.
+   */
+  reviewActions: { id: "staged" | "unstaged"; label: string }[];
   siblings: ExtensionVcsStatusFact<ExtensionVcsStatusSiblings> | { state: "loading" };
 }
+
+/** Preserve full-comparison inputs without permitting status to narrow them to pathspecs. */
+export type ExtensionVcsStatusReviewInput =
+  | (Omit<Extract<ExtensionVcsDiffInput, { rangeEndpoints?: never }>, "pathspecs"> & {
+      pathspecs?: never;
+    })
+  | (Omit<
+      Extract<ExtensionVcsDiffInput, { rangeEndpoints: ExtensionVcsRangeEndpoints }>,
+      "pathspecs"
+    > & {
+      pathspecs?: never;
+    });
 
 /** Offer read-only status independently of history or any provider's index semantics. */
 export interface ExtensionVcsStatusCapability {
@@ -1024,14 +1042,14 @@ export interface ExtensionVcsStatusCapability {
     snapshot: ExtensionVcsStatusSnapshot,
     context: ExtensionVcsLoadContext,
   ): Promise<ExtensionVcsStatusSiblings>;
-  /** Revalidate the target and token, then return the existing full-comparison review input. */
+  /** Revalidate target/token and the offered semantic id; reject pathspecs, even an empty list. */
   planReview(
     snapshot: ExtensionVcsStatusSnapshot,
     actionId: string,
     context: ExtensionVcsLoadContext,
   ): Promise<{
     cwd: string;
-    input: ExtensionVcsDiffInput;
+    input: ExtensionVcsStatusReviewInput;
   }>;
   /** Cover working-copy and shared/per-worktree metadata; hosts retain periodic polling. */
   watchPlan?(

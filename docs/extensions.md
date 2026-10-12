@@ -522,24 +522,41 @@ implements the capability in `packages/hunk-git/src/status.ts`.
   `context.cwd` is the launch repository authority; a target may inspect only that repository's
   worktrees. A missing repository/worktree rejects. No process-wide cwd change, extension loading,
   fetch, checkout, staging or other mutation belongs in this capability.
-- `readSiblings(snapshot, context)` returns bounded same-repository summaries. Return an
-  unavailable/error row, not zero changes, when a sibling cannot be read. The initial snapshot
-  can publish `siblings: { state: "loading" }` before this slower scan completes.
+- `readSiblings(snapshot, context)` returns bounded same-repository summaries. Worktree ids and
+  paths must each be unique. Every row must share the inspected `repositoryId`; a row matching
+  the current worktree's id or path must match both. These checks also apply to embedded
+  `siblings: { state: "ready", value }` snapshots. Return an unavailable/error row, not zero
+  changes, when a sibling cannot be read. The initial snapshot can publish
+  `siblings: { state: "loading" }` before this slower scan completes.
+- `reviewActions` supports only the semantic ids `staged` (index comparison) and `unstaged`
+  (working-copy comparison), each at most once; ids are not opaque. Labels are provider-owned.
+  A provider without an index offers only `unstaged`, with a suitable label such as "Working
+  copy changes", and omits `paths[].index`. It need not invent Git staging semantics.
 - `planReview(snapshot, actionId, context)` revalidates source/target identity and the opaque
-  snapshot token, then returns `{ cwd, input }` for the existing full working-tree comparison.
-  The UI passes only a provider-offered action id; it does not construct revision expressions or
-  narrow the comparison to a selected file. A live working tree can still change after planning;
-  the token is not content attestation.
+  snapshot token, then returns `{ cwd, input: ExtensionVcsStatusReviewInput }` for a full
+  comparison. This exported input type retains the exclusive `range` / `rangeEndpoints`
+  variants but excludes pathspecs. The boundary explicitly rejects a `pathspecs` field, even an
+  empty list or `undefined`, rather than silently stripping it. `cwd` must retain the inspected
+  worktree path and `input.staged` must agree with the offered semantic action id. The UI passes
+  only a provider-offered id; it does not construct revision expressions or narrow the comparison
+  to a selected file. A live working tree can still change after planning; the token is not
+  content attestation.
 - Optional async `watchPlan(snapshot, context)` uses the existing watch-plan vocabulary for
   worktree and shared/per-worktree metadata. Hosts keep periodic polling for missed events,
   serialize/coalesce refreshes, cancel superseded reads and reject late generations.
 
 Every asynchronous operation receives `context.signal` and must honor cancellation, bound its
-I/O, and reap subprocesses. Status results allow at most 20,000 unique changed paths, 100 sibling
-rows and 32 review actions. Oversized current status fails explicitly; bounded sibling lists set
-`truncated`. Fields marked unknown/error must not become clean, aligned, or zero-count results.
-The extension boundary validates and copies snapshots before publishing them. Paths retain
-literal Unicode, tabs and newlines for navigation/JSON; renderers escape control characters.
+I/O, and reap subprocesses. Status results allow at most 20,000 unique changed paths and 100
+sibling rows. The defensive review-action collection limit is 32, but the supported ids permit
+at most two unique actions. Ready operation arrays allow five entries. Watch plans allow 256
+targets, four sources per target, and 20,000 ignored roots or entries per target. Each result
+also has a 40,000-entry aggregate collection budget, counting nested arrays and outer rows/targets,
+and an 8 MiB aggregate UTF-8 text budget across normalized fields. The boundary preflights collection
+lengths before Zod traverses array elements and checks text before publishing copied results. Oversized results fail
+explicitly; providers returning bounded sibling lists set `truncated`. Fields marked unknown/error
+must not become clean, aligned, or zero-count results. The extension boundary validates and copies
+snapshots before publishing them. Paths retain literal Unicode, tabs and newlines for
+navigation/JSON; renderers escape control characters.
 Providers without an index omit `paths[].index` rather than inventing Git staging states.
 
 `changedPathCount` counts unique destination paths, including rename destinations and untracked

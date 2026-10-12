@@ -212,7 +212,19 @@ describe("Git workspace status reads", () => {
     writeFileSync(join(sibling, "ignored-build", "output.txt"), "ignored");
     writeFileSync(join(sibling, ".gitignore"), "ignored-build/\n");
     const watch = await capability.watchPlan!(target, { cwd });
-    expect(watch.targets.map((target) => target.directory)).toContain(resolveCanonicalPath(gitDir));
+    const metadataTargets = watch.targets.filter((entry) => entry.sources.includes("vcs-metadata"));
+    expect(metadataTargets).toEqual([
+      {
+        kind: "directory-tree",
+        directory: target.worktree.repositoryId,
+        ignoredRoots: [join(target.worktree.repositoryId, "objects")],
+        sources: ["vcs-metadata"],
+      },
+    ]);
+    const originWatch = await capability.watchPlan!(snapshot, { cwd });
+    expect(originWatch.targets.filter((entry) => entry.sources.includes("vcs-metadata"))).toEqual(
+      metadataTargets,
+    );
     expect(watch.targets.find((entry) => entry.directory === target.worktree.path)).toMatchObject({
       ignoredRoots: [
         join(target.worktree.path, ".git"),

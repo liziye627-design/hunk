@@ -10,13 +10,12 @@ function createTestGroupPath(
   return { path, index: "unchanged", worktree: "modified", conflict: false, ...facts };
 }
 
-test("unique group membership retains provider order and does not hide tracked or conflict facts", () => {
+test("normalized group membership retains provider order and does not hide tracked or conflict facts", () => {
   const paths = [
     createTestGroupPath("new-b", { worktree: "untracked" }),
     createTestGroupPath("tracked-b"),
     createTestGroupPath("new-a", { worktree: "untracked", index: undefined }),
     createTestGroupPath("tracked-a", { index: "renamed", previousPath: "old-a" }),
-    createTestGroupPath("new-b", { worktree: "untracked" }),
     createTestGroupPath("mixed", { worktree: "untracked", index: "added" }),
     createTestGroupPath("conflict", { worktree: "untracked", conflict: true }),
   ];

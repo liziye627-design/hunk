@@ -36,8 +36,13 @@ export function wrapStatusSpans(spans: StatusTextSpan[], width: number): StatusT
   return lines;
 }
 
+type StatusContentState = Pick<
+  StatusState,
+  "snapshot" | "expandedPathGroups" | "expandedWorktrees"
+>;
+
 /** Stack secondary facts when needed and preserve terminal-cell widths without an inspector. */
-export function projectStatusRows(state: StatusState, width: number): StatusRow[] {
+export function projectStatusRows(state: StatusContentState, width: number): StatusRow[] {
   const available = Math.max(1, width - 2);
   const heading = (text: string, role: StatusTextSpan["role"] = "muted") =>
     wrapStatusSpans([{ text, role }], available);
@@ -57,7 +62,7 @@ export function projectStatusRows(state: StatusState, width: number): StatusRow[
   };
   const snapshot = state.snapshot;
   const groups = groupStatusPaths(snapshot.paths);
-  const changedPathCount = groups.reduce((count, group) => count + group.paths.length, 0);
+  const changedPathCount = snapshot.changedPathCount;
   const rows: StatusRow[] = [
     {
       id: "changes",
@@ -146,68 +151,159 @@ export function projectStatusRows(state: StatusState, width: number): StatusRow[
   return rows;
 }
 
+export interface StatusGeometry {
+  rows: StatusRow[];
+  starts: number[];
+  total: number;
+  byId: Map<string, number>;
+  navigable: StatusRow[];
+  navigationIndex: Map<string, number>;
+}
+
+/** Index measured rows once; selection and scrolling never remeasure content. */
+export function measureStatusRows(rows: StatusRow[]): StatusGeometry {
+  const geometry: StatusGeometry = {
+    rows,
+    starts: [],
+    total: 0,
+    byId: new Map(),
+    navigable: [],
+    navigationIndex: new Map(),
+  };
+  for (const [index, row] of rows.entries()) {
+    geometry.starts.push(geometry.total);
+    geometry.total += row.lines.length;
+    geometry.byId.set(row.id, index);
+    if (row.kind !== "heading") {
+      geometry.navigationIndex.set(row.id, geometry.navigable.length);
+      geometry.navigable.push(row);
+    }
+  }
+  return geometry;
+}
+
+/** Cache content measurement independently of focus, notices, loading and snapshot metadata. */
+export function createStatusGeometryCache(project = projectStatusRows) {
+  let previous:
+    | {
+        paths: StatusState["snapshot"]["paths"];
+        changedPathCount: number;
+        siblings: StatusState["snapshot"]["siblings"];
+        tracked: boolean;
+        untracked: boolean;
+        worktrees: boolean;
+        width: number;
+        geometry: StatusGeometry;
+      }
+    | undefined;
+
+  return {
+    get(state: StatusState, width: number): StatusGeometry {
+      const { paths, changedPathCount, siblings } = state.snapshot;
+      const { tracked, untracked } = state.expandedPathGroups;
+      if (
+        previous &&
+        previous.paths === paths &&
+        previous.changedPathCount === changedPathCount &&
+        previous.siblings === siblings &&
+        previous.tracked === tracked &&
+        previous.untracked === untracked &&
+        previous.worktrees === state.expandedWorktrees &&
+        previous.width === width
+      )
+        return previous.geometry;
+
+      const geometry = measureStatusRows(project(state, width));
+      previous = {
+        paths,
+        changedPathCount,
+        siblings,
+        tracked,
+        untracked,
+        worktrees: state.expandedWorktrees,
+        width,
+        geometry,
+      };
+      return geometry;
+    },
+  };
+}
+
+/** Keep focus visible without materializing any viewport entries. */
+function statusViewportTop(
+  geometry: StatusGeometry,
+  selected: string | null,
+  requestedTop: number,
+  height: number,
+) {
+  let top = Math.max(0, Math.min(requestedTop, geometry.total - height));
+  const focus = selected === null ? undefined : geometry.byId.get(selected);
+  if (focus !== undefined) {
+    const start = geometry.starts[focus]!;
+    const end = start + geometry.rows[focus]!.lines.length;
+    if (end - start > height) top = Math.max(start, Math.min(top, end - height));
+    else if (start < top) top = start;
+    else if (end > top + height) top = end - height;
+  }
+  return top;
+}
+
 /** Scroll oversized rows before moving selection, so every wrapped fact remains reachable. */
 export function moveStatusFocus(
-  rows: StatusRow[],
+  geometry: StatusGeometry,
   selected: string | null,
   requestedTop: number,
   height: number,
   delta: number,
 ) {
-  const viewport = planStatusViewport(rows, selected, requestedTop, height);
-  let start = 0;
-  for (const row of rows) {
-    if (row.id === selected) {
-      const lastTop = start + row.lines.length - height;
-      if (
-        row.lines.length > height &&
-        (delta > 0 ? viewport.top < lastTop : viewport.top > start)
-      ) {
-        return { selected, top: Math.max(start, Math.min(lastTop, viewport.top + delta)) };
-      }
-      break;
-    }
-    start += row.lines.length;
+  const top = statusViewportTop(geometry, selected, requestedTop, height);
+  const focus = selected === null ? undefined : geometry.byId.get(selected);
+  if (focus !== undefined) {
+    const row = geometry.rows[focus]!;
+    const start = geometry.starts[focus]!;
+    const lastTop = start + row.lines.length - height;
+    if (row.lines.length > height && (delta > 0 ? top < lastTop : top > start))
+      return { selected, top: Math.max(start, Math.min(lastTop, top + delta)) };
   }
-  const navigable = rows.filter((row) => row.kind !== "heading");
-  const index = navigable.findIndex((row) => row.id === selected);
-  const next = navigable[Math.max(0, Math.min(navigable.length - 1, index + delta))]?.id ?? null;
-  return { selected: next, top: planStatusViewport(rows, next, viewport.top, height).top };
+
+  const index = selected === null ? -1 : (geometry.navigationIndex.get(selected) ?? -1);
+  const next =
+    geometry.navigable[Math.max(0, Math.min(geometry.navigable.length - 1, index + delta))]?.id ??
+    null;
+  return { selected: next, top: statusViewportTop(geometry, next, top, height) };
 }
 
-/** Keep the focused row visible through resize while retaining the user's requested scroll. */
+/** Materialize only intersecting rows, seeking their measured offsets without flattening the stream. */
 export function planStatusViewport(
-  rows: StatusRow[],
+  geometry: StatusGeometry,
   selected: string | null,
   requestedTop: number,
   height: number,
 ) {
-  const starts: number[] = [];
-  let total = 0;
-  for (const row of rows) {
-    starts.push(total);
-    total += row.lines.length;
+  const top = statusViewportTop(geometry, selected, requestedTop, height);
+  const { rows, starts } = geometry;
+  let low = 0;
+  let high = rows.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (starts[middle]! + rows[middle]!.lines.length <= top) low = middle + 1;
+    else high = middle;
   }
-  let top = Math.max(0, Math.min(requestedTop, total - height));
-  const focus = rows.findIndex((row) => row.id === selected);
-  if (focus >= 0) {
-    const start = starts[focus]!;
-    const end = start + rows[focus]!.lines.length;
-    if (end - start > height) top = Math.max(start, Math.min(top, end - height));
-    else if (start < top) top = start;
-    else if (end > top + height) top = end - height;
+
+  const lines: {
+    row: StatusRow;
+    spans: StatusTextSpan[];
+    text: string;
+    offset: number;
+  }[] = [];
+  for (let index = low; index < rows.length && starts[index]! < top + height; index++) {
+    const row = rows[index]!;
+    const start = starts[index]!;
+    const end = Math.min(row.lines.length, top + height - start);
+    for (let line = Math.max(0, top - start); line < end; line++) {
+      const spans = row.lines[line]!;
+      lines.push({ row, spans, text: statusPlainText(spans), offset: start + line });
+    }
   }
-  return {
-    top,
-    lines: rows
-      .flatMap((row, index) =>
-        row.lines.map((spans, line) => ({
-          row,
-          spans,
-          text: statusPlainText(spans),
-          offset: starts[index]! + line,
-        })),
-      )
-      .filter((line) => line.offset >= top && line.offset < top + height),
-  };
+  return { top, lines };
 }

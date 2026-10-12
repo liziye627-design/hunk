@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { open, stat, realpath } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { buildGitIgnoredDirectoryArgs, parseGitIgnoredDirectoryRoots } from "./commands";
+import { buildGitMetadataTargets } from "./watchTargets";
 import { normalizePathForOS, resolveCanonicalPath } from "@hunk/vcs/path";
 import { runAbortableCommand } from "@hunk/vcs/async-process";
 import type {
@@ -11,6 +12,7 @@ import type {
   ExtensionVcsStatusOperation,
   ExtensionVcsStatusPath,
   ExtensionVcsStatusPathState,
+  ExtensionVcsStatusSnapshot,
   ExtensionVcsStatusUpstream,
   ExtensionVcsStatusWorktreeSummary,
 } from "hunkdiff/extension";
@@ -385,12 +387,12 @@ export function createGitStatusCapability(gitExecutable = "git"): ExtensionVcsSt
         upstream(parsed, target.gitDir),
       ]);
       context.signal?.throwIfAborted();
-      const reviewActions = [
+      const reviewActions: ExtensionVcsStatusSnapshot["reviewActions"] = [
         ...(parsed.paths.some((path) => path.index !== "unchanged")
-          ? [{ id: "staged", label: "Staged changes" }]
+          ? [{ id: "staged" as const, label: "Staged changes" }]
           : []),
         ...(parsed.paths.some((path) => path.worktree !== "unchanged")
-          ? [{ id: "unstaged", label: "Working tree changes" }]
+          ? [{ id: "unstaged" as const, label: "Working tree changes" }]
           : []),
       ];
       return {
@@ -516,12 +518,7 @@ export function createGitStatusCapability(gitExecutable = "git"): ExtensionVcsSt
             ],
             sources: ["worktree"],
           },
-          ...[...new Set([target.gitDir, target.commonDir])].map((directory) => ({
-            kind: "directory-tree" as const,
-            directory,
-            ignoredRoots: [join(directory, "objects")],
-            sources: ["vcs-metadata" as const],
-          })),
+          ...buildGitMetadataTargets(target.gitDir, target.commonDir),
         ],
       };
     },
