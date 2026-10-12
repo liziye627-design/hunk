@@ -1,5 +1,6 @@
 import { dirname } from "node:path";
 import { resolveCanonicalPath } from "../core/run/paths";
+import { resolveManagedNpmModuleRoot } from "./manage/workspace";
 
 /**
  * Host-owned modules served to dynamically imported extension files.
@@ -18,12 +19,16 @@ import { resolveCanonicalPath } from "../core/run/paths";
  * modules when Hunk runs from source ("Requested module is already fetched"
  * from react-reconciler), and runtime `onResolve` — which could scope by
  * importer — does not fire in Bun. So instead, each extension directory gets a
- * `build.onLoad` hook that transpiles the extension file itself and rewrites
+ * `build.onLoad` hook that transpiles extension modules and rewrites
  * host-owned import specifiers to prefixed virtual modules (`hunk-host:react`)
  * that cannot collide with real resolution. Transpiling here is load-bearing:
  * JSX lowering emits automatic-runtime imports (`react/jsx-runtime`, or
  * `@opentui/react/jsx-runtime` under a pragma), and they only pass through the
  * rewrite if they exist before Bun's own loader would have added them.
+ *
+ * Recorded npm entries extend this scope to their isolated dependency workspace:
+ * hoisted helpers must also receive the host APIs and React instance. Neighboring
+ * installs and unrecorded directories keep their own filesystem resolution.
  *
  * Modules linked into the compiled binary never re-resolve their imports, so
  * none of this affects the host bundle in any run mode.
@@ -205,6 +210,6 @@ export function registerHostRuntimeModules(entryPaths: readonly string[]) {
 
   registerVirtualModules();
   for (const path of entryPaths) {
-    registerSourceRoot(dirname(path));
+    registerSourceRoot(resolveManagedNpmModuleRoot(path) ?? dirname(path));
   }
 }

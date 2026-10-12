@@ -44,6 +44,17 @@ test/
 | `bun run test:install-vm`            | Opt-in Firecracker install compatibility scenarios under `test/cli/install-vm/`                                        |
 | `bun run vm:shell [-- --with-hunk]`  | Disposable Ubuntu Firecracker shell, optionally with a fresh local Hunk build                                          |
 
+npm extension installation tests require npm/Node.js and use a disposable loopback registry
+with real tarballs, not public npm. To exercise both the source CLI and a compiled binary:
+
+```sh
+bun run build:bin
+HUNK_TEST_BINARY="$PWD/dist/hunk" bun test test/cli/npm-extension-install.test.ts
+```
+
+`HUNK_TEST_BINARY` is optional; the source CLI case runs in the default suite. On Windows,
+set that environment variable to the absolute path of `dist/hunk.exe` before running Bun.
+
 The dedicated trees are not selected directly by `bun run test`, though package tests import some
 shared runtime fixtures. Run the commands that match the changed behavior; omission from the default
 suite does not mean another command covers it.
