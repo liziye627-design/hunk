@@ -864,9 +864,9 @@ export function DiffPane({
   // Initialized to null so the first render never fires a selection change; a real scroll
   // is required before passive viewport-follow selection can trigger.
   const lastViewportSelectionTopRef = useRef<number | null>(null);
-  // Stops that successive clamps moved the current line away from, innermost last, so a
-  // multi-hop wheel roundtrip can unwind back to the pre-clamp stop.
-  const lineCursorBeforeClampRef = useRef<LineCursor[]>([]);
+  // Preserve the original line through successive clamps. Intermediate viewport-edge
+  // stops need no history: ordinary clamping follows them until the original is visible.
+  const lineCursorBeforeClampRef = useRef<LineCursor | null>(null);
   // The cursor this effect last acted on, so deliberate cursor moves outside a clamp reset
   // the unwind memory above instead of leaving a displaced stop behind.
   const lastClampCursorRef = useRef<LineCursor | null>(null);
@@ -1600,14 +1600,13 @@ export function DiffPane({
     // A deliberate cursor move (a click, a step) ends any clamp unwind: the reviewer chose
     // a new stop, so a later scroll must not restore the displaced one.
     if (lineCursor !== lastClampCursorRef.current) {
-      lineCursorBeforeClampRef.current = [];
+      lineCursorBeforeClampRef.current = null;
       lastClampCursorRef.current = lineCursor;
     }
 
     if (lineCursors.length > 0) {
-      // A wheel burst can return past several displaced stops in one viewport update.
-      // Restore the oldest visible stop and retire every later hop, including stops the
-      // viewport skipped entirely; no later scroll is needed to finish the unwind.
+      // Restore the original line directly, whether a return arrives as paced events or
+      // one burst. Remembering only that line keeps restoration lookup constant-time.
       const clampedCursor = clampLineCursorToViewport({
         boundsOf: lineCursorBoundsOf,
         current: lineCursor,
@@ -1617,11 +1616,10 @@ export function DiffPane({
         viewportHeight: scrollViewport.height,
       });
       if (clampedCursor && clampedCursor !== lineCursor) {
-        const restoredIndex = lineCursorBeforeClampRef.current.indexOf(clampedCursor);
-        if (restoredIndex >= 0) {
-          lineCursorBeforeClampRef.current.splice(restoredIndex);
-        } else if (lineCursor) {
-          lineCursorBeforeClampRef.current.push(lineCursor);
+        if (clampedCursor === lineCursorBeforeClampRef.current) {
+          lineCursorBeforeClampRef.current = null;
+        } else if (lineCursorBeforeClampRef.current === null) {
+          lineCursorBeforeClampRef.current = lineCursor;
         }
         lastClampCursorRef.current = clampedCursor;
         onViewportLineCursorChange?.(clampedCursor);
