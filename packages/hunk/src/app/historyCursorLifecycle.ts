@@ -10,6 +10,7 @@ export function createHistoryCursorLifecycle(
   const lifetime = new AbortController();
   const pending = new Set<Promise<VcsHistorySource>>();
   const closures = new WeakMap<VcsHistorySource, Promise<void>>();
+  let cleanupFailure: { error: unknown } | undefined;
 
   /** Coalesce cursor disposal even when shutdown races an in-flight refresh. */
   const closeSource = (cursor: VcsHistorySource) => {
@@ -22,6 +23,10 @@ export function createHistoryCursorLifecycle(
       } catch (error) {
         closed = Promise.reject(error);
       }
+      closed = closed.catch((error: unknown) => {
+        cleanupFailure ??= { error };
+        throw error;
+      });
       closures.set(cursor, closed);
     }
     return closed;
@@ -59,11 +64,10 @@ export function createHistoryCursorLifecycle(
         lifetime.abort(new Error("History session is closed."));
         const activeClose = closeSource(source);
         closing = (async () => {
-          const [result] = await Promise.all([
-            Promise.allSettled([activeClose]),
-            Promise.allSettled(pending),
-          ]);
-          if (result[0]!.status === "rejected") throw result[0]!.reason;
+          await Promise.allSettled([activeClose, ...pending]);
+          // Refresh cancellation is expected; disposal failures still belong to teardown even
+          // when the failed cursor has retired or its refresh promise has already settled.
+          if (cleanupFailure) throw cleanupFailure.error;
         })();
       }
       return closing;
