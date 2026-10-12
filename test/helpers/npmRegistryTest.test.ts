@@ -1,5 +1,5 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createNpmRegistryTest } from "./npmRegistryTest";
@@ -18,13 +18,17 @@ function createRegistryRootTest() {
 }
 
 test("does not start a registry process when configuration preparation fails", async () => {
-  const root = createRegistryRootTest();
-  mkdirSync(join(root, "user.npmrc"));
+  const directory = createRegistryRootTest();
+  const root = join(directory, "not-a-directory");
+  // A non-directory parent fails consistently, including platforms where an
+  // empty write to a directory does not throw.
+  writeFileSync(root, "regular file");
   const spawn = spyOn(Bun, "spawn").mockImplementation(() => {
     throw new Error("Unexpected process launch during failed setup");
   });
+  spawn.mockClear();
   try {
-    await expect(createNpmRegistryTest(root)).rejects.toThrow();
+    await expect(createNpmRegistryTest(root)).rejects.toThrow(/ENOTDIR|ENOENT/);
     expect(spawn).not.toHaveBeenCalled();
   } finally {
     spawn.mockRestore();
