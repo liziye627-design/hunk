@@ -310,13 +310,13 @@ export function clampLineCursorToViewport({
   scrollTop: number;
   viewportHeight: number;
   /**
-   * The stop the current line was on before the clamp moved it, when the caller knows it.
+   * Stops displaced by earlier clamps, oldest first, when the caller knows them.
    *
    * Wheel roundtrips move the viewport past a line and back; without this memory the clamp
    * re-adopts an edge stop on the way out and then keeps it on the way home, so the comment
    * target ends up a few lines (or one gap) away from the line the reviewer is reading.
    */
-  clampedFrom?: LineCursor | null;
+  clampedFrom?: readonly LineCursor[];
 }): LineCursor | null {
   if (cursors.length === 0 || viewportHeight <= 0) {
     return current;
@@ -324,16 +324,16 @@ export function clampLineCursorToViewport({
 
   const viewportBottom = scrollTop + viewportHeight;
 
-  // A return journey restores the stop the last clamp moved away from, when that stop is
-  // visible again and the viewport only moves while the pointer scrolls.
-  if (clampedFrom) {
-    const fromBounds = boundsOf(clampedFrom);
+  // Restore the oldest visible displaced stop. A batched return may skip intermediate
+  // stops entirely, so requiring the newest stop to be visible would strand the cursor.
+  for (const displacedCursor of clampedFrom ?? []) {
+    const fromBounds = boundsOf(displacedCursor);
     if (
       fromBounds &&
       fromBounds.top >= scrollTop &&
       fromBounds.top + fromBounds.height <= viewportBottom
     ) {
-      return clampedFrom;
+      return displacedCursor;
     }
   }
 

@@ -497,7 +497,7 @@ describe("clampLineCursorToViewport", () => {
       clampLineCursorToViewport({
         boundsOf,
         current: cursors[2]!,
-        clampedFrom: cursors[0]!,
+        clampedFrom: [cursors[0]!],
         cursors,
         scrollTop: 0,
         viewportHeight: 3,
@@ -505,12 +505,51 @@ describe("clampLineCursorToViewport", () => {
     ).toEqual(cursors[0]!);
   });
 
+  test("restores the oldest visible stop across multiple clamp hops", () => {
+    expect(
+      clampLineCursorToViewport({
+        boundsOf,
+        current: cursors[3]!,
+        clampedFrom: [cursors[0]!, cursors[1]!, cursors[2]!],
+        cursors,
+        scrollTop: 0,
+        viewportHeight: 3,
+      }),
+    ).toEqual(cursors[0]!);
+  });
+
+  test("restores a stop even when a batched return skips the newest displaced stop", () => {
+    expect(
+      clampLineCursorToViewport({
+        boundsOf,
+        current: cursors[3]!,
+        clampedFrom: [cursors[0]!, cursors[2]!],
+        cursors,
+        scrollTop: 0,
+        viewportHeight: 2,
+      }),
+    ).toEqual(cursors[0]!);
+  });
+
+  test("restores the oldest visible stop when the original remains off-screen", () => {
+    expect(
+      clampLineCursorToViewport({
+        boundsOf,
+        current: cursors[3]!,
+        clampedFrom: [cursors[0]!, cursors[1]!, cursors[2]!],
+        cursors,
+        scrollTop: 1,
+        viewportHeight: 2,
+      }),
+    ).toEqual(cursors[1]!);
+  });
+
   test("keeps the clamped stop while the remembered one is still off-screen", () => {
     expect(
       clampLineCursorToViewport({
         boundsOf,
         current: cursors[2]!,
-        clampedFrom: cursors[0]!,
+        clampedFrom: [cursors[0]!],
         cursors,
         scrollTop: 2,
         viewportHeight: 2,

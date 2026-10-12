@@ -1605,21 +1605,21 @@ export function DiffPane({
     }
 
     if (lineCursors.length > 0) {
-      // Each clamp away from the current stop pushes where it came from, and each restore
-      // pops it back, so a multi-hop wheel roundtrip unwinds to the pre-clamp stop instead
-      // of parking on an edge the scroll crossed.
-      const clampedFrom = lineCursorBeforeClampRef.current.at(-1) ?? null;
+      // A wheel burst can return past several displaced stops in one viewport update.
+      // Restore the oldest visible stop and retire every later hop, including stops the
+      // viewport skipped entirely; no later scroll is needed to finish the unwind.
       const clampedCursor = clampLineCursorToViewport({
         boundsOf: lineCursorBoundsOf,
         current: lineCursor,
-        clampedFrom,
+        clampedFrom: lineCursorBeforeClampRef.current,
         cursors: lineCursors,
         scrollTop: scrollViewport.top,
         viewportHeight: scrollViewport.height,
       });
       if (clampedCursor && clampedCursor !== lineCursor) {
-        if (clampedCursor === clampedFrom) {
-          lineCursorBeforeClampRef.current.pop();
+        const restoredIndex = lineCursorBeforeClampRef.current.indexOf(clampedCursor);
+        if (restoredIndex >= 0) {
+          lineCursorBeforeClampRef.current.splice(restoredIndex);
         } else if (lineCursor) {
           lineCursorBeforeClampRef.current.push(lineCursor);
         }
