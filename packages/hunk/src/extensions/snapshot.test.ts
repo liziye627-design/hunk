@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -64,7 +65,17 @@ describe("repository extension snapshots", () => {
     const artifact = resolveRepoSnapshotEntry(snapshot, snapshot.entries[0]!.candidate, {
       env: fixture.env,
     });
-    expect(artifact.startsWith(fixture.env.XDG_CONFIG_HOME)).toBeTrue();
+    expect(realpathSync(artifact)).toBe(
+      realpathSync(
+        join(
+          fixture.env.XDG_CONFIG_HOME,
+          "hunk",
+          "extension-snapshots",
+          snapshot.fingerprint,
+          `${snapshot.entries[0]!.digest}.mjs`,
+        ),
+      ),
+    );
   });
 
   test("retirement during snapshot preparation prevents even an approved module from evaluating", async () => {
@@ -159,6 +170,58 @@ export default function(hunk) {
       env: fixture.env,
     });
     expect((await import(commonjsArtifact)).useState).toBe(useState);
+  });
+
+  test("preserves import and require export conditions in the same captured dependency graph", async () => {
+    const fixture = createTestSnapshotFixture();
+    const pkg = join(fixture.repo, "node_modules", "fixture-pkg");
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(
+      join(pkg, "package.json"),
+      JSON.stringify({
+        name: "fixture-pkg",
+        exports: { ".": { import: "./import.mjs", require: "./require.cjs" }, "./blocked": null },
+      }),
+    );
+    writeFileSync(join(pkg, "import.mjs"), `export const branch='import';`);
+    writeFileSync(join(pkg, "require.cjs"), `module.exports={branch:'require'};`);
+    writeFileSync(
+      fixture.entry,
+      `import {branch} from 'fixture-pkg'; const required=require('fixture-pkg'); export default function(hunk) {hunk.registerFileLanguage(branch, 'typescript'); hunk.registerFileLanguage(required.branch, 'typescript');}`,
+    );
+    const snapshot = await fixture.prepare();
+    writeExtensionTrust(fixture.repo, "trusted", { env: fixture.env, snapshot });
+    const loaded = await fixture.load();
+    expect(loaded.issues).toEqual([]);
+    expect(loaded.registry.fileLanguages.map((entry) => entry.matcher)).toEqual([
+      { kind: "extension", value: "import" },
+      { kind: "extension", value: "require" },
+    ]);
+    writeFileSync(
+      join(pkg, "blocked.ts"),
+      `export default function() {throw new Error('blocked');}`,
+    );
+    writeFileSync(
+      fixture.entry,
+      `import blocked from 'fixture-pkg/blocked'; export default blocked;`,
+    );
+    expect((await fixture.load()).loaded).toEqual([]);
+  });
+
+  test("preserves require examples in ordinary data strings", async () => {
+    const fixture = createTestSnapshotFixture();
+    writeFileSync(
+      fixture.entry,
+      `export default function(hunk) {hunk.registerFileLanguage("require('react')",'typescript');}`,
+    );
+    const snapshot = await fixture.prepare();
+    writeExtensionTrust(fixture.repo, "trusted", { env: fixture.env, snapshot });
+    const loaded = await fixture.load();
+    expect(loaded.issues).toEqual([]);
+    expect(loaded.registry.fileLanguages[0]?.matcher).toEqual({
+      kind: "extension",
+      value: "require('react')",
+    });
   });
 
   test("does not interpret ordinary data strings or property keys as module resolvers", async () => {

@@ -42,6 +42,18 @@ export function isESModuleDependency(path: string) {
   return false;
 }
 
+/** Resolve a filesystem module with the caller's import/require export conditions. */
+export function resolveFilesystemModulePath(
+  specifier: string,
+  importerPath: string,
+  kind: ModuleSpecifierKind,
+) {
+  return (
+    resolvers[kind === "require" ? "require" : "import"](dirname(importerPath), specifier) ||
+    undefined
+  );
+}
+
 /** Locate a relative dependency so its own module references can receive the same rewrite. */
 export function resolveRelativeModulePath(
   specifier: string,
@@ -50,10 +62,7 @@ export function resolveRelativeModulePath(
 ) {
   if (!specifier.startsWith(".")) return undefined;
 
-  return (
-    resolvers[kind === "require" ? "require" : "import"](dirname(importerPath), specifier) ||
-    undefined
-  );
+  return resolveFilesystemModulePath(specifier, importerPath, kind);
 }
 
 /** Resolve a package reference without changing relative paths, builtins, or host virtual modules. */
@@ -72,10 +81,7 @@ export function resolveInstalledPackageSpecifier(
   }
 
   // Do not fall back to Bun on failure: its compiled loader can bypass null exports.
-  const resolved = resolvers[kind === "require" ? "require" : "import"](
-    dirname(importerPath),
-    specifier,
-  );
+  const resolved = resolveFilesystemModulePath(specifier, importerPath, kind);
   if (!resolved) throw new Error(`Cannot resolve package '${specifier}' from '${importerPath}'`);
   return kind === "require" ? resolved : pathToFileURL(resolved).href;
 }

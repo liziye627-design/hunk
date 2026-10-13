@@ -18,6 +18,8 @@ import {
 } from "node:fs";
 import { builtinModules } from "node:module";
 import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
+import { resolveFilesystemModulePath } from "./installedPackageResolution";
+import type { ModuleSpecifierKind } from "./moduleSpecifiers";
 import { parse } from "@babel/parser";
 import { resolveAppStatePath, resolveCanonicalPath } from "../core/run/paths";
 import {
@@ -264,10 +266,10 @@ function capturePackageInputs(
         sources,
         budget,
       );
-      return;
+      return packageRoot;
     }
     const parent = dirname(directory);
-    if (parent === directory) return;
+    if (parent === directory) return undefined;
     directory = parent;
   }
 }
@@ -278,6 +280,8 @@ function resolveSnapshotDependency(
   importer: string,
   sources: Map<string, string>,
   budget: SnapshotInputBudget,
+  kind: ModuleSpecifierKind,
+  packageRoot: string | undefined,
 ) {
   if (isAbsolute(specifier) || specifier.startsWith("./") || specifier.startsWith("../")) {
     const path = resolve(dirname(importer), specifier);
@@ -299,9 +303,21 @@ function resolveSnapshotDependency(
       if (!statSync(path).isDirectory())
         throw new Error(`Snapshot input must be a regular file: ${path}`);
       captureResolverInputs(join(path, "__snapshot_resolve__.js"), sources, budget);
-      return resolveCanonicalPath(Bun.resolveSync(resolveCanonicalPath(path), dirname(importer)));
+      const resolved = resolveFilesystemModulePath(resolveCanonicalPath(path), importer, kind);
+      if (!resolved) throw new Error(`Cannot resolve snapshot dependency: ${specifier}`);
+      return resolveCanonicalPath(resolved);
     }
   }
+  try {
+    const resolved = resolveFilesystemModulePath(specifier, importer, kind);
+    if (resolved) return resolveCanonicalPath(resolved);
+  } catch (error) {
+    // Installed packages and package-import maps own their conditions/null exports. Only
+    // absent bare packages may fall back to Bun's tsconfig alias lookup.
+    if (packageRoot || specifier.startsWith("#")) throw error;
+  }
+  if (packageRoot || specifier.startsWith("#"))
+    throw new Error(`Cannot resolve snapshot dependency: ${specifier}`);
   return resolveCanonicalPath(Bun.resolveSync(specifier, dirname(importer)));
 }
 
@@ -334,12 +350,24 @@ async function bundleEntry(candidate: ExtensionCandidate, budget: SnapshotInputB
             // Resolve filenames only. A private namespace keeps repository loader settings/macros
             // out of Bun's file pipeline; every executable module passes our parser first.
             captureResolverInputs(args.importer || candidate.path, sources, budget);
-            capturePackageInputs(args.path, args.importer || candidate.path, sources, budget);
+            const packageRoot = capturePackageInputs(
+              args.path,
+              args.importer || candidate.path,
+              sources,
+              budget,
+            );
+            const kind: ModuleSpecifierKind = args.kind.startsWith("require")
+              ? "require"
+              : args.kind === "dynamic-import"
+                ? "dynamic-import"
+                : "import";
             const path = resolveSnapshotDependency(
               args.path,
               args.importer || candidate.path,
               sources,
               budget,
+              kind,
+              packageRoot,
             );
             return { path, namespace: "hunk-repo-snapshot" };
           });
