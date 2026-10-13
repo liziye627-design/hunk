@@ -102,7 +102,12 @@ async function reserveLifecycleTestPort(): Promise<number> {
 }
 
 /** List sessions on the test daemon and report CLI failures with their captured output. */
-function listSessionsViaCli(cwd: string, runtimeDir: string, port: number): Promise<string> {
+function listSessionsViaCli(
+  cwd: string,
+  runtimeDir: string,
+  port: number,
+  timeoutMs = 10_000,
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
@@ -125,7 +130,7 @@ function listSessionsViaCli(cwd: string, runtimeDir: string, port: number): Prom
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
       reject(new Error(`hunk session list timed out.\nstdout: ${out}\nstderr: ${stderr}`));
-    }, 10_000);
+    }, timeoutMs);
 
     child.stdout.on("data", (chunk: Buffer) => {
       out += chunk.toString("utf8");
@@ -152,6 +157,28 @@ function listSessionsViaCli(cwd: string, runtimeDir: string, port: number): Prom
       resolve(out);
     });
   });
+}
+
+/** Wait for asynchronous producer registration without delaying the post-suspension checks. */
+async function waitForLifecycleTestSession(cwd: string, runtimeDir: string, port: number) {
+  const deadline = Date.now() + 15_000;
+  let lastOutput = "";
+
+  while (Date.now() < deadline) {
+    lastOutput = await listSessionsViaCli(
+      cwd,
+      runtimeDir,
+      port,
+      Math.min(10_000, deadline - Date.now()),
+    );
+    if (/before\.txt.*after\.txt/.test(lastOutput)) {
+      return;
+    }
+
+    await Bun.sleep(100);
+  }
+
+  throw new Error(`Timed out waiting for the suspension test session.\n${lastOutput}`);
 }
 
 function revokeTerminal(path: string) {
@@ -375,12 +402,9 @@ describe("PTY lifecycle", () => {
         await session.waitForText(/HUNK_SHELL>/, { timeout: 5_000 });
         session.writeRaw(`${hunkCommand}\r`);
         await session.waitForText(/before\.txt.*after\.txt/, { timeout: 15_000 });
-        await Bun.sleep(2_000);
 
-        // Confirm this window registered before spending a full TTL suspended.
-        expect(await listSessionsViaCli(fixture.dir, runtimeDir, port)).toMatch(
-          /before\.txt.*after\.txt/,
-        );
+        // Registration runs asynchronously after the first frame; wait before suspending it.
+        await waitForLifecycleTestSession(fixture.dir, runtimeDir, port);
 
         session.writeRaw("\x1a");
         await session.waitForText(/\[\d+\][^\n]*(?:Stopped|suspended)/, { timeout: 5_000 });
