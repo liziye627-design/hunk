@@ -5,7 +5,6 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -14,6 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { isValidElement, useState } from "react";
 import { discoverExtensions } from "./discovery";
+import { resolveCanonicalPath } from "../core/run/paths";
 import { loadExtensions } from "./host";
 import { prepareRepoExtensionSnapshot, resolveRepoSnapshotEntry } from "./snapshot";
 import { resolveRepoTrust, writeExtensionTrust } from "./trust";
@@ -65,8 +65,8 @@ describe("repository extension snapshots", () => {
     const artifact = resolveRepoSnapshotEntry(snapshot, snapshot.entries[0]!.candidate, {
       env: fixture.env,
     });
-    expect(realpathSync(artifact)).toBe(
-      realpathSync(
+    expect(resolveCanonicalPath(artifact)).toBe(
+      resolveCanonicalPath(
         join(
           fixture.env.XDG_CONFIG_HOME,
           "hunk",
