@@ -16,6 +16,9 @@ function runTestPatch(args: readonly string[], input = "") {
     stdin: Buffer.from(input),
     stdout: "pipe",
     stderr: "pipe",
+    // Bound exit regressions at the process level; a synchronous spawn blocks test timers.
+    timeout: 10_000,
+    killSignal: "SIGKILL",
     env: { ...process.env, HUNK_DISABLE_UPDATE_NOTICE: "1" },
   });
 }
