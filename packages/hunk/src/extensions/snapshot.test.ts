@@ -462,6 +462,50 @@ export default function(hunk) {
     expect(existsSync(fixture.marker)).toBeFalse();
   });
 
+  test("bounds all nested package metadata consulted while resolving extended configs", async () => {
+    const fixture = createTestSnapshotFixture();
+    const pkg = join(fixture.repo, "node_modules", "configs");
+    mkdirSync(join(pkg, "nested"), { recursive: true });
+    writeFileSync(join(pkg, "package.json"), '{"name":"configs"}');
+    writeFileSync(join(pkg, "nested", "base.json"), "{}");
+    writeFileSync(join(fixture.repo, "tsconfig.json"), '{"extends":"configs/nested/base.json"}');
+    const nested = join(pkg, "nested", "package.json");
+    writeFileSync(nested, " ".repeat(8 * 1024 * 1024 + 1) + "{}");
+    await expect(fixture.prepare()).rejects.toThrow("limit");
+    rmSync(nested);
+    mkdirSync(nested);
+    await expect(fixture.prepare()).rejects.toThrow("regular file");
+    rmSync(nested, { recursive: true });
+    writeFileSync(nested, "{}");
+    const snapshot = await fixture.prepare();
+    expect(snapshot.inputs.some((input) => input.path === resolveCanonicalPath(nested))).toBeTrue();
+  });
+
+  test("retains the defining directory of paths through multiple extended configs", async () => {
+    const fixture = createTestSnapshotFixture();
+    for (const name of ["a", "b"]) mkdirSync(join(fixture.repo, name));
+    writeFileSync(
+      join(fixture.repo, "a", "base.json"),
+      '{"compilerOptions":{"paths":{"chosen":["./helper.ts"]}}}',
+    );
+    writeFileSync(join(fixture.repo, "b", "base.json"), '{"compilerOptions":{"strict":true}}');
+    writeFileSync(join(fixture.repo, "a", "helper.ts"), `export const branch='a';`);
+    writeFileSync(join(fixture.repo, "b", "helper.ts"), `export const branch='b';`);
+    writeFileSync(
+      join(fixture.repo, "tsconfig.json"),
+      '{"extends":["./a/base.json","./b/base.json"]}',
+    );
+    writeFileSync(
+      fixture.entry,
+      `import {branch} from 'chosen'; export default function(hunk) {hunk.registerFileLanguage(branch,'typescript');}`,
+    );
+    const snapshot = await fixture.prepare();
+    writeExtensionTrust(fixture.repo, "trusted", { env: fixture.env, snapshot });
+    const loaded = await fixture.load();
+    expect(loaded.issues).toEqual([]);
+    expect(loaded.registry.fileLanguages[0]?.matcher).toEqual({ kind: "extension", value: "a" });
+  });
+
   test("keeps locally bound require-like functions unchanged", async () => {
     const fixture = createTestSnapshotFixture();
     writeFileSync(

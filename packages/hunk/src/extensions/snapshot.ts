@@ -320,12 +320,19 @@ function resolveSnapshotDependency(
       if (!statSync(path).isDirectory())
         throw new Error(`Snapshot input must be a regular file: ${path}`);
       captureResolverInputs(join(path, "__snapshot_resolve__.js"), sources, budget);
-      const resolved = resolveFilesystemModulePath(resolveCanonicalPath(path), importer, kind);
+      const resolved = resolveFilesystemModulePath(
+        resolveCanonicalPath(path),
+        importer,
+        kind,
+        (path) => readCapturedConfig(path, sources, budget),
+      );
       if (!resolved) throw new Error(`Cannot resolve snapshot dependency: ${specifier}`);
       return resolveCanonicalPath(resolved);
     }
   }
-  const resolved = resolveFilesystemModulePath(specifier, importer, kind);
+  const resolved = resolveFilesystemModulePath(specifier, importer, kind, (path) =>
+    readCapturedConfig(path, sources, budget),
+  );
   if (!resolved) throw new Error(`Cannot resolve snapshot dependency: ${specifier}`);
   return resolveCanonicalPath(resolved);
 }
@@ -387,8 +394,17 @@ async function bundleEntry(candidate: ExtensionCandidate, budget: SnapshotInputB
                     kind,
                   );
                   return { path, namespace: "hunk-repo-snapshot" };
-                } catch {
-                  // Try the next literal path target before ordinary package resolution.
+                } catch (error) {
+                  // Only absent path targets may fall back; bounded-capture failures remain fatal.
+                  const code = (error as NodeJS.ErrnoException).code;
+                  const message = error instanceof Error ? error.message : String(error);
+                  if (
+                    code !== "ENOENT" &&
+                    code !== "ENOTDIR" &&
+                    !message.startsWith("Can't resolve ") &&
+                    !message.startsWith("Cannot resolve snapshot dependency:")
+                  )
+                    throw error;
                 }
               }
             }

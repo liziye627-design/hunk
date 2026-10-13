@@ -6,9 +6,27 @@ import { create } from "enhanced-resolve";
 import type { ModuleSpecifierKind } from "./moduleSpecifiers";
 
 /** Resolve on-disk packages with Bun/Node conditions, independently of Bun's compiled filesystem. */
-function createPackageResolver(kind: "import" | "require") {
+function createPackageResolver(
+  kind: "import" | "require",
+  readMetadata?: (path: string) => string,
+) {
+  const resolverFileSystem = readMetadata
+    ? {
+        ...fileSystem,
+        readFileSync: ((path: unknown, options?: unknown) => {
+          if (typeof path !== "string")
+            throw new Error("Snapshot resolver expects filesystem metadata paths.");
+          const contents = readMetadata(path);
+          const encoding =
+            typeof options === "string"
+              ? options
+              : (options as { encoding?: string } | undefined)?.encoding;
+          return encoding ? contents : Buffer.from(contents, "utf8");
+        }) as typeof fileSystem.readFileSync,
+      }
+    : fileSystem;
   return create.sync({
-    fileSystem,
+    fileSystem: resolverFileSystem,
     conditionNames: ["bun", "node", kind],
     extensions: [".tsx", ".ts", ".jsx", ".js", ".mjs", ".cjs", ".json", ".node"],
     mainFields: kind === "import" ? ["module", "main"] : ["main"],
@@ -47,11 +65,32 @@ export function resolveFilesystemModulePath(
   specifier: string,
   importerPath: string,
   kind: ModuleSpecifierKind,
+  readMetadata?: (path: string) => string,
 ) {
-  return (
-    resolvers[kind === "require" ? "require" : "import"](dirname(importerPath), specifier) ||
-    undefined
-  );
+  const mode = kind === "require" ? "require" : "import";
+  let captureFailure: unknown;
+  const boundedRead = readMetadata
+    ? (path: string) => {
+        try {
+          return readMetadata(path);
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          // Missing candidate manifests are ordinary lookups; failed capture of an existing
+          // file is fatal even when enhanced-resolve would ignore its metadata read error.
+          if (code !== "ENOENT" && code !== "ENOTDIR") captureFailure ??= error;
+          throw error;
+        }
+      }
+    : undefined;
+  const resolver = boundedRead ? createPackageResolver(mode, boundedRead) : resolvers[mode];
+  let result: string | false;
+  try {
+    result = resolver(dirname(importerPath), specifier);
+  } catch (error) {
+    throw captureFailure ?? error;
+  }
+  if (captureFailure) throw captureFailure;
+  return result || undefined;
 }
 
 /** Locate a relative dependency so its own module references can receive the same rewrite. */

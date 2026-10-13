@@ -37,7 +37,11 @@ export function readSnapshotAliasConfig(
       ...stack,
       absolute,
     ]);
-    result = { ...result, ...inherited };
+    if (inherited.baseUrl !== undefined) result.baseUrl = inherited.baseUrl;
+    if (inherited.paths !== undefined) {
+      result.paths = inherited.paths;
+      result.pathsRoot = inherited.pathsRoot;
+    }
   }
   const options = data.compilerOptions;
   if (typeof options?.baseUrl === "string")
@@ -82,7 +86,7 @@ function resolveExtendedConfig(specifier: string, importer: string, read: Snapsh
     if (parent === directory) break;
     directory = parent;
   }
-  const path = resolveFilesystemModulePath(specifier, importer, "import");
+  const path = resolveFilesystemModulePath(specifier, importer, "import", read);
   if (!path) throw new Error(`Cannot resolve snapshot tsconfig extends: ${specifier}`);
   return path;
 }
