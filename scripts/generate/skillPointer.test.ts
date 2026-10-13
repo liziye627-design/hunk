@@ -58,7 +58,11 @@ describe("skill pointers", () => {
     const repoRoot = join(import.meta.dir, "..", "..");
     for (const name of ["hunk-release", "hunk-launch-video"]) {
       const document = readFileSync(join(repoRoot, "skills", name, "SKILL.md"), "utf8");
-      expect(document.split("---")[1]).toContain("metadata:\n  internal: true");
+      for (const text of [document, document.replaceAll("\r\n", "\n").replaceAll("\n", "\r\n")]) {
+        expect(text.replaceAll("\r\n", "\n").split("---")[1]).toContain(
+          "metadata:\n  internal: true",
+        );
+      }
     }
   });
 });
