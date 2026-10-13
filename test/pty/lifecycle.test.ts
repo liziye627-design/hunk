@@ -2,6 +2,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { dlopen, FFIType, ptr, type Library } from "bun:ffi";
 import { spawn, type ChildProcess } from "node:child_process";
 import { closeSync, existsSync, read, readdirSync, readFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { join } from "node:path";
 import { createPtyHarness } from "./harness";
 
@@ -80,9 +81,29 @@ function stopDaemonsUnder(runtimeDir: string) {
   }
 }
 
-/** Run `hunk session list` from a separate process against one isolated runtime. */
-function listSessionsViaCli(cwd: string, runtimeDir: string): Promise<string> {
-  return new Promise((resolve) => {
+/** Reserve a loopback port so the suspension test never uses an existing daemon. */
+async function reserveLifecycleTestPort(): Promise<number> {
+  const listener = createServer();
+  await new Promise<void>((resolve, reject) => {
+    listener.once("error", reject);
+    listener.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  const address = listener.address();
+  await new Promise<void>((resolve, reject) => {
+    listener.close((error) => (error ? reject(error) : resolve()));
+  });
+
+  if (!address || typeof address === "string") {
+    throw new Error("Failed to reserve a loopback port for the suspension test.");
+  }
+
+  return address.port;
+}
+
+/** List sessions on the test daemon and report CLI failures with their captured output. */
+function listSessionsViaCli(cwd: string, runtimeDir: string, port: number): Promise<string> {
+  return new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
       ["run", join(process.cwd(), "packages", "hunk", "src", "main.tsx"), "session", "list"],
@@ -92,16 +113,44 @@ function listSessionsViaCli(cwd: string, runtimeDir: string): Promise<string> {
           ...process.env,
           XDG_RUNTIME_DIR: runtimeDir,
           XDG_CONFIG_HOME: runtimeDir,
+          HUNK_MCP_HOST: "127.0.0.1",
+          HUNK_MCP_PORT: String(port),
           TERM: "xterm-256color",
         },
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
     let out = "";
+    let stderr = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error(`hunk session list timed out.\nstdout: ${out}\nstderr: ${stderr}`));
+    }, 10_000);
+
     child.stdout.on("data", (chunk: Buffer) => {
       out += chunk.toString("utf8");
     });
-    child.on("exit", () => resolve(out));
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    // Wait for close so both output streams are drained before checking the exit status.
+    child.once("close", (code, signal) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        reject(
+          new Error(
+            `hunk session list failed (code=${code}, signal=${signal}).\nstdout: ${out}\nstderr: ${stderr}`,
+          ),
+        );
+        return;
+      }
+
+      resolve(out);
+    });
   });
 }
 
@@ -308,12 +357,15 @@ describe("PTY lifecycle", () => {
         fixture.after,
       ]);
       const runtimeDir = harness.createIsolatedConfigHome();
+      const port = await reserveLifecycleTestPort();
       const session = await harness.launchShellCommand({
         command: "exec /bin/bash --noprofile --norc -i",
         cwd: fixture.dir,
         env: {
           XDG_RUNTIME_DIR: runtimeDir,
           XDG_CONFIG_HOME: runtimeDir,
+          HUNK_MCP_HOST: "127.0.0.1",
+          HUNK_MCP_PORT: String(port),
           HUNK_MCP_DISABLE: "0",
         },
       });
@@ -325,6 +377,11 @@ describe("PTY lifecycle", () => {
         await session.waitForText(/before\.txt.*after\.txt/, { timeout: 15_000 });
         await Bun.sleep(2_000);
 
+        // Confirm this window registered before spending a full TTL suspended.
+        expect(await listSessionsViaCli(fixture.dir, runtimeDir, port)).toMatch(
+          /before\.txt.*after\.txt/,
+        );
+
         session.writeRaw("\x1a");
         await session.waitForText(/\[\d+\][^\n]*(?:Stopped|suspended)/, { timeout: 5_000 });
 
@@ -335,7 +392,7 @@ describe("PTY lifecycle", () => {
 
         // The suspended producer's transport stays connected, so the broker must keep the
         // session registered instead of pruning it after the stale TTL.
-        const whileSuspended = await listSessionsViaCli(fixture.dir, runtimeDir);
+        const whileSuspended = await listSessionsViaCli(fixture.dir, runtimeDir, port);
         expect(whileSuspended).toMatch(/before\.txt.*after\.txt/);
 
         session.writeRaw("fg\r");
@@ -345,7 +402,7 @@ describe("PTY lifecycle", () => {
 
         // With the session never pruned, the resumed app is listed immediately, without the
         // reconnect-delay recovery gap a pruned session would need.
-        const afterResume = await listSessionsViaCli(fixture.dir, runtimeDir);
+        const afterResume = await listSessionsViaCli(fixture.dir, runtimeDir, port);
         expect(afterResume).toMatch(/before\.txt.*after\.txt/);
       } finally {
         session.close();
