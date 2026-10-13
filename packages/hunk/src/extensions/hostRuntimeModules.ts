@@ -47,6 +47,10 @@ const HOST_MODULE_LOADERS: Record<string, () => Promise<object>> = {
 
 /** Namespace for virtual modules, chosen to never collide with a real package. */
 const HOST_MODULE_PREFIX = "hunk-host:";
+
+/** List imports whose identity belongs to the host rather than an extension dependency. */
+export const HOST_MODULE_SPECIFIERS = Object.keys(HOST_MODULE_LOADERS);
+
 const HOST_SPECIFIERS = Object.keys(HOST_MODULE_LOADERS)
   .map((specifier) => specifier.replace(/[/@]/g, "\\$&"))
   .join("|");
@@ -134,7 +138,7 @@ function registerVirtualModules() {
 }
 
 /** Lower CommonJS host requires to static imports so lazy virtual factories finish before evaluation. */
-function rewriteCompiledHostRequires(code: string) {
+export function rewriteCompiledHostRequires(code: string) {
   const bindings = new Map<string, string>();
   let bindingIndex = 0;
   const pattern = new RegExp(
