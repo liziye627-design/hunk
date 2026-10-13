@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { parse, type Node } from "acorn";
+import { analyze } from "eslint-scope";
 import { dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveCanonicalPath } from "../core/run/paths";
@@ -143,7 +144,40 @@ export function rewriteCompiledHostRequires(code: string) {
     ecmaVersion: "latest",
     sourceType: "module",
     allowReturnOutsideFunction: true,
+    ranges: true,
   });
+  const scopes = analyze(program as Parameters<typeof analyze>[0], {
+    ecmaVersion: 2025,
+    sourceType: "module",
+  });
+  const loaderReferences = new Set<number>();
+  const unboundRequireWritten = scopes.globalScope.through.some(
+    (reference) => reference.identifier.name === "require" && reference.isWrite(),
+  );
+  for (const scope of scopes.scopes) {
+    for (const reference of scope.references) {
+      const name = reference.identifier.name;
+      const runtimeRequire = name === "require" && !reference.resolved && !unboundRequireWritten;
+      const generatedHelper =
+        /^__require\d*$/.test(name) &&
+        reference.resolved?.defs.some((definition) => {
+          const init = (definition.node as unknown as { init?: Record<string, unknown> }).init;
+          const object = init?.object as Record<string, unknown> | undefined;
+          const meta = object?.meta as { name?: string } | undefined;
+          const property = object?.property as { name?: string } | undefined;
+          const member = init?.property as { name?: string } | undefined;
+          return (
+            init?.type === "MemberExpression" &&
+            !init.computed &&
+            object?.type === "MetaProperty" &&
+            meta?.name === "import" &&
+            property?.name === "meta" &&
+            member?.name === "require"
+          );
+        });
+      if (runtimeRequire || generatedHelper) loaderReferences.add(reference.identifier.range![0]);
+    }
+  }
 
   /** Replace actual loader calls, never quoted examples, comments, or member calls. */
   function visit(node: Node) {
@@ -153,7 +187,7 @@ export function rewriteCompiledHostRequires(code: string) {
     if (
       node.type === "CallExpression" &&
       callee?.type === "Identifier" &&
-      /^(?:__require\d*|require)$/.test(callee.name ?? "") &&
+      loaderReferences.has(callee.start) &&
       args?.length === 1 &&
       args[0]?.type === "Literal" &&
       typeof args[0].value === "string" &&

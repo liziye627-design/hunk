@@ -417,6 +417,67 @@ export default function(hunk) {
     expect((await fixture.load()).loaded).toEqual([]);
   });
 
+  test("resolves changed alias mappings from current captured configs without Bun's cache", async () => {
+    const fixture = createTestSnapshotFixture();
+    writeFileSync(join(fixture.repo, "a.ts"), `export const branch='a';`);
+    writeFileSync(join(fixture.repo, "b.ts"), `export const branch='b';`);
+    writeFileSync(
+      fixture.entry,
+      `import {branch} from 'chosen'; export default function(hunk) {hunk.registerFileLanguage(branch,'typescript');}`,
+    );
+    const config = join(fixture.repo, "tsconfig.json");
+    writeFileSync(config, JSON.stringify({ compilerOptions: { paths: { chosen: ["./a.ts"] } } }));
+    const first = await fixture.prepare();
+    writeFileSync(config, JSON.stringify({ compilerOptions: { paths: { chosen: ["./b.ts"] } } }));
+    const second = await fixture.prepare();
+    expect(second.fingerprint).not.toBe(first.fingerprint);
+    writeExtensionTrust(fixture.repo, "trusted", { env: fixture.env, snapshot: second });
+    const loaded = await fixture.load();
+    expect(loaded.issues).toEqual([]);
+    expect(loaded.registry.fileLanguages[0]?.matcher).toEqual({ kind: "extension", value: "b" });
+  });
+
+  test("captures and bounds extended tsconfigs before native resolution", async () => {
+    const fixture = createTestSnapshotFixture();
+    const base = join(fixture.repo, "base.json");
+    writeFileSync(join(fixture.repo, "tsconfig.json"), `{"extends":"./base.json"}`);
+    writeFileSync(
+      base,
+      `{// inert JSONC config\n "compilerOptions":{"paths":{"chosen":["./helper.ts"]}},}`,
+    );
+    writeFileSync(join(fixture.repo, "helper.ts"), `export const branch='extended';`);
+    writeFileSync(
+      fixture.entry,
+      `import {branch} from 'chosen'; export default function(hunk) {hunk.registerFileLanguage(branch,'typescript');}`,
+    );
+    const snapshot = await fixture.prepare();
+    expect(snapshot.inputs.some((input) => input.path === resolveCanonicalPath(base))).toBeTrue();
+    writeExtensionTrust(fixture.repo, "trusted", { env: fixture.env, snapshot });
+    expect((await fixture.load()).issues).toEqual([]);
+    writeFileSync(base, " ".repeat(8 * 1024 * 1024 + 1));
+    await expect(fixture.prepare()).rejects.toThrow("limit");
+    rmSync(base);
+    mkdirSync(base);
+    await expect(fixture.prepare()).rejects.toThrow("regular file");
+    expect(existsSync(fixture.marker)).toBeFalse();
+  });
+
+  test("keeps locally bound require-like functions unchanged", async () => {
+    const fixture = createTestSnapshotFixture();
+    writeFileSync(
+      fixture.entry,
+      `function __require(name) {return name;} export default function(hunk) {hunk.registerFileLanguage(__require('react'),'typescript');}`,
+    );
+    const snapshot = await fixture.prepare();
+    writeExtensionTrust(fixture.repo, "trusted", { env: fixture.env, snapshot });
+    const loaded = await fixture.load();
+    expect(loaded.issues).toEqual([]);
+    expect(loaded.registry.fileLanguages[0]?.matcher).toEqual({
+      kind: "extension",
+      value: "react",
+    });
+  });
+
   test("bundles literal dynamic imports", async () => {
     const fixture = createTestSnapshotFixture();
     writeFileSync(join(dirname(fixture.entry), "helper.ts"), `export const value = 'literal';`);

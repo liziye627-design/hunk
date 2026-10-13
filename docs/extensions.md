@@ -316,8 +316,10 @@ Snapshots require statically resolvable module graphs. Computed `import()`/`requ
 CommonJS loaders, `require.resolve`, and `node:module` runtime resolvers are refused, as are Bun
 macros/import attributes and native or non-JavaScript/JSON dependencies. Use literal imports; dependencies are bundled, while Hunk's
 API, React/OpenTUI, and runtime builtins remain host-owned. JSX import sources must be `react`
-or `@opentui/react` so a pragma cannot synthesize a compile-time macro import. Statically resolved alias targets are captured too; repository build plugins and compile-time
-macros are never run. `import.meta` refers to the stored bundle, so source-relative asset reads must be
+or `@opentui/react` so a pragma cannot synthesize a compile-time macro import. Alias targets resolve
+from the current captured tsconfig/jsconfig data, including bounded, recursively captured `extends`
+files, without Bun's process-wide alias cache; repository build plugins and compile-time macros
+are never run. `import.meta` refers to the stored bundle, so source-relative asset reads must be
 reworked; use workspace APIs for review content. Explicit `--extension` paths remain live,
 one-run consent for development, and user-installed extensions keep their existing loading model.
 
