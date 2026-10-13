@@ -280,6 +280,42 @@ describe("useExtensionPaneController", () => {
     }
   });
 
+  test("recovers a right-side render failure without revealing unrelated left panes", async () => {
+    const replacement = registeredPane("meta", "files", {
+      placement: "right",
+      replaces: HUNK_FILES_PANE_KEY,
+    });
+    const aux = registeredPane("meta", "aux", { placement: "left", defaultOpen: true });
+    const harness = await renderController({
+      extensions: loadResultWith([replacement, aux]),
+      initialResponsiveShowsSidebar: false,
+      initialSidebar: true,
+    });
+    try {
+      const controls = harness.current().createPaneControls("meta");
+      const planned = harness
+        .current()
+        .paneLayout.panes.find(({ pane }) => pane.key === "meta:files");
+      expect(planned).toBeDefined();
+      expect(controls.isVisible("aux")).toBeFalse();
+
+      await act(async () => harness.current().reportPaneRenderFailure(planned!.pane));
+      await harness.settle();
+      expect(controls.isVisible("hunk:files")).toBeTrue();
+      expect(controls.isOpen("files")).toBeFalse();
+      expect(controls.isVisible("files")).toBeFalse();
+      expect(controls.isOpen("aux")).toBeTrue();
+      expect(controls.isVisible("aux")).toBeFalse();
+
+      await act(async () => harness.current().toggleFilesPane());
+      await harness.settle();
+      expect(controls.isVisible("hunk:files")).toBeFalse();
+      expect(controls.isVisible("aux")).toBeFalse();
+    } finally {
+      await destroy(harness.setup);
+    }
+  });
+
   test("restores built-in files after a revealed right replacement fails availability", async () => {
     const harness = await renderController({
       extensions: loadResultWith([

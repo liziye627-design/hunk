@@ -194,6 +194,7 @@ export function useExtensionPaneController({
   const responsiveRef = useRef({ canForceShowSidebar, responsiveShowsSidebar });
   const retainedCurrentLinePaneRegistrationsRef = useRef<ReadonlySet<RegisteredPane>>(new Set());
   const quarantinedRef = useRef(new WeakSet<RegisteredPane>());
+  const renderFailedFilesReplacementRef = useRef<RegisteredPane | null>(null);
   const reportedAvailabilityFailuresRef = useRef(new WeakSet<RegisteredPane>());
   const lastAvailabilityProbeRef = useRef<{
     request: AvailabilityRequest;
@@ -344,7 +345,9 @@ export function useExtensionPaneController({
     (!pagerMode && responsiveShowsSidebar) || (revealedEdges[edge] && canForceShowSidebar);
   const failedFilesReplacement = sessionPanes.find(
     (pane) =>
-      committedPaneOpenState.open.includes(pane.key) &&
+      (committedPaneOpenState.open.includes(pane.key) ||
+        (pane.registered === renderFailedFilesReplacementRef.current &&
+          committedPaneOpenState.open.includes(HUNK_FILES_PANE_KEY))) &&
       pane.registered.pane.replaces === HUNK_FILES_PANE_KEY &&
       quarantinedRef.current.has(pane.registered),
   );
@@ -512,11 +515,11 @@ export function useExtensionPaneController({
       openKeys: visibleKeys,
       quarantined: quarantinedRef.current,
     });
-    if (
-      visibleKeys.includes(visibleFilesPaneKey) &&
-      visibleFilesPaneKey === HUNK_FILES_PANE_KEY &&
-      !logicalOpenKeys.includes(HUNK_FILES_PANE_KEY)
-    ) {
+    if (visibleKeys.includes(visibleFilesPaneKey) && visibleFilesPaneKey === HUNK_FILES_PANE_KEY) {
+      if (logicalOpenKeys.includes(HUNK_FILES_PANE_KEY)) {
+        setPaneOpen(HUNK_FILES_PANE_KEY, false);
+        return;
+      }
       const failedReplacement = panes.find(
         (pane) =>
           logicalOpenKeys.includes(pane.key) &&
@@ -556,13 +559,14 @@ export function useExtensionPaneController({
       quarantinedRef.current.add(pane.registered);
       cancelResize(pane.key);
       if (pane.registered.pane.replaces === HUNK_FILES_PANE_KEY) {
+        // Keep recovery tied to this registration and its edge, not every left pane.
+        renderFailedFilesReplacementRef.current = pane.registered;
         setPaneOpen(pane.key, false);
         setPaneOpen(HUNK_FILES_PANE_KEY, true);
-        revealSidebarEdge("left");
       }
       setPaneFailureEpoch((value) => value + 1);
     },
-    [cancelResize, revealSidebarEdge, setPaneOpen],
+    [cancelResize, setPaneOpen],
   );
 
   // Start a drag only for the divider still owned by this exact pane registration.
