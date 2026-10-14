@@ -130,7 +130,7 @@ Run this repository's extensions?
 
 **Trust** records the decision and reloads the session; **not now** asks again next time; **never** stops the offers. The prompt is a dialog over the review stream, not a gate in front of it — dismiss it and keep reviewing.
 
-Decisions are stored per repository root in `~/.config/hunk/state.json`, keyed by path (the VS Code workspace-trust model). A different repository later occupying a trusted path inherits the decision; clear the entry if that matters for a path you reuse.
+Decisions are stored per repository root in `$XDG_STATE_HOME/hunk/state.json` (by default `~/.local/state/hunk/state.json`), keyed by path (the VS Code workspace-trust model). A different repository later occupying a trusted path inherits the decision; clear the entry if that matters for a path you reuse.
 
 ## Failure isolation
 
