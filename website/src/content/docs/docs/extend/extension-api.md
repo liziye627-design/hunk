@@ -7,7 +7,7 @@ The extension factory receives one API object. Registration calls are only valid
 
 ## `hunk.apiVersion`
 
-The API generation this Hunk speaks (currently `31`). Branch on it if you want one file to support several Hunk versions, or declare `"hunk": {"apiVersion": N}` in a folder extension's `package.json` so an older Hunk refuses to install it.
+The API generation this Hunk speaks (currently `31`). Branch on it if you want one file to support several Hunk versions, or declare `"hunk": {"apiVersion": N}` in a folder extension's `package.json` so an older Hunk refuses to load it with a clear message.
 
 | Version | Adds                                                                                                      |
 | ------- | --------------------------------------------------------------------------------------------------------- |
