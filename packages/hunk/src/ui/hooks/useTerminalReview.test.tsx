@@ -533,7 +533,13 @@ describe("useTerminalReview", () => {
       }
 
       expect(expectValue(controllerRef.current).visibleFiles).toHaveLength(1);
-      Bun.gc(true);
+
+      // Drain completed React jobs and deferred collector work without dereferencing the probes.
+      for (let collection = 0; collection < 3; collection += 1) {
+        await Bun.sleep(0);
+        Bun.gc(true);
+      }
+
       const retainedEarlyReloads = reloadedFiles
         .slice(0, -4)
         .filter((reference) => reference.deref() !== undefined);
