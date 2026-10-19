@@ -11,3 +11,10 @@ is the `@hunk/term-video` package in `packages/term-video/`.
 The full procedure — regeneration steps, environment gotchas, scene authoring,
 storyboard model, and content-accuracy rules — lives in
 [`skills/hunk-launch-video/SKILL.md`](../../skills/hunk-launch-video/SKILL.md).
+
+`promo/` holds a free-form social cut: `promo.html` exposes a deterministic
+`renderAt(t)` motion page built around the brand mark (h-shaped zoom
+transitions, offset-outline extrusions, keycaps, stickers) over the same
+captured frames, and `promo/render.mjs` steps it frame by frame and encodes
+`<workDir>/promo.mp4`. Its work dir also needs
+`@fontsource-variable/jetbrains-mono`; `--stills 1.5,8` renders review stills.
