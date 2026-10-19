@@ -515,6 +515,24 @@ describe("useTerminalReview", () => {
   });
 
   test("releases files from earlier reloads once later reloads replace them", async () => {
+    // Isolate GC reachability from the shared runner's accumulated JIT and renderer state.
+    if (process.env.HUNK_TEST_RELOAD_RETENTION_CHILD !== "1") {
+      const child = Bun.spawnSync({
+        cmd: [
+          process.execPath,
+          "test",
+          import.meta.path,
+          "--test-name-pattern",
+          "releases files from earlier reloads once later reloads replace them",
+        ],
+        env: { ...process.env, HUNK_TEST_RELOAD_RETENTION_CHILD: "1" },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(child.exitCode, new TextDecoder().decode(child.stderr)).toBe(0);
+      return;
+    }
+
     const { controllerRef, setFilesRef, setup } = await renderTerminalReview([createTwoHunkFile()]);
     const reloadedFiles: WeakRef<DiffFile>[] = [];
 
@@ -533,13 +551,7 @@ describe("useTerminalReview", () => {
       }
 
       expect(expectValue(controllerRef.current).visibleFiles).toHaveLength(1);
-
-      // Drain completed React jobs and deferred collector work without dereferencing the probes.
-      for (let collection = 0; collection < 3; collection += 1) {
-        await Bun.sleep(0);
-        Bun.gc(true);
-      }
-
+      Bun.gc(true);
       const retainedEarlyReloads = reloadedFiles
         .slice(0, -4)
         .filter((reference) => reference.deref() !== undefined);
