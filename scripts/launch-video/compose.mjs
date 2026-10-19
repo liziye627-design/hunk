@@ -28,6 +28,9 @@ const FULL_FRAME = { x: 0.5, y: 0.5, scale: 1 };
 const OPEN_TITLE = "hunk open — taskboard";
 const DOCUMENT_CAMERA = { x: 0.62, y: 0.4, scale: 1.25 };
 const LAYOUT_TITLE = "hunk diff — auto layout";
+const CONFLICT_TITLE = "hunk diff — merge in progress";
+const SCROLL_TITLE = "hunk diff — taskboard";
+const SCROLL_CAMERA = { x: 0, y: 1, scale: 1.3 };
 const SHELL_TITLE = "shell — taskboard";
 const COMPLETION_CAMERA = { x: 0, y: 0, scale: 1.3 };
 
@@ -52,14 +55,20 @@ const LAYOUT_CARD = `
   <div class="foot">tunable with <span style="color: #e0af68">auto_split_min_width</span></div>
 `;
 
-const SKILL_CARD = `
+const CONFLICT_CARD = `
   <div class="badge">NEW</div>
-  <h2>Agent skills, version-matched</h2>
+  <h2>Review merge conflicts</h2>
   <div class="cmds">
-    <div class="cmd" style="font-size: 38px"><span class="p">❯</span> npx skills add modem-dev/hunk -g --skill hunk-review</div>
-    <div class="cmd" style="font-size: 38px"><span class="p">❯</span> hunk skill show hunk-review</div>
+    <div class="cmd"><span class="p">❯</span> hunk diff</div>
   </div>
-  <div class="foot">instructions load from the hunk you have installed</div>
+  <div class="foot">conflict diffs during paused merges and rebases</div>
+`;
+
+const SCROLL_OFF_CARD = `
+  <div class="badge">NEW</div>
+  <h2>Scroll-off context</h2>
+  <div class="sub">the cursor never hugs the edge of the screen</div>
+  <div class="foot">5 rows by default · <span style="color: #e0af68">scroll_off = 0</span> restores edge scrolling</div>
 `;
 
 const COMPLETION_CARD = `
@@ -74,8 +83,8 @@ const COMPLETION_CARD = `
 const ALSO_ITEMS = [
   ["npm extensions", "hunk extension install @scope/pkg"],
   ["faster first keypress", "syntax highlighting moved to a worker"],
-  ["scroll_off", "keeps 5 rows of context while stepping"],
-  ["conflict diffs", "during paused merges and rebases"],
+  ["lighter --watch", "long-running sessions no longer leak memory"],
+  ["remappable save", "hunk.review.saveNote for the note composer"],
   ["extension APIs", "independent side panes and review filters"],
 ];
 
@@ -177,29 +186,57 @@ const SHOTS = [
     caption: `close it — back to split`,
   },
 
-  // Agent skills printed by the installed binary.
-  { kind: "card", html: SKILL_CARD, dur: 3.2, enter: true },
+  // Conflict diffs during a paused merge.
+  { kind: "card", html: CONFLICT_CARD, dur: 2.6, enter: true },
   {
     kind: "term",
-    img: "skill-output",
-    title: SHELL_TITLE,
-    dur: 1.2,
+    img: "conflict-review",
+    title: CONFLICT_TITLE,
+    dur: 2.4,
     enter: true,
     camera: FULL_FRAME,
-    cameraKey: "skill",
-    capKey: "skill",
-    caption: `skills ship <span class="hl">inside</span> the hunk binary`,
+    cameraKey: "conflict",
+    capKey: "conflict",
+    caption: `mid-merge? the conflicts are <span class="hl">the review</span>`,
   },
   {
     kind: "term",
-    img: "skill-output",
-    title: SHELL_TITLE,
-    dur: 2.8,
-    camera: { x: 0, y: 0, scale: 1.5 },
-    cameraKey: "skill",
-    motion: 0.8,
-    capKey: "skill",
+    img: "conflict-review",
+    title: CONFLICT_TITLE,
+    dur: 3.2,
+    camera: { x: 0.35, y: 0.78, scale: 1.4 },
+    cameraKey: "conflict",
+    highlight: { x: 0.008, y: 0.6875, width: 0.6, height: 0.156 },
+    motion: 0.85,
+    capKey: "conflict-sides",
+    caption: `both sides, between the markers, in context`,
   },
+
+  // scroll_off: the cursor walks down, then the view scrolls ahead of it.
+  { kind: "card", html: SCROLL_OFF_CARD, dur: 2.6, enter: true },
+  ...Array.from({ length: 10 }, (_, i) => ({
+    kind: "term",
+    img: `scrolloff-step-${String(i + 10).padStart(2, "0")}`,
+    title: SCROLL_TITLE,
+    dur: i === 0 ? 1.2 : 0.18,
+    enter: i === 0,
+    camera: SCROLL_CAMERA,
+    cameraKey: "scrolloff",
+    capKey: "scrolloff-step",
+    caption: `step through a diff with <span class="hl">j</span>`,
+  })),
+  ...Array.from({ length: 14 }, (_, i) => ({
+    kind: "term",
+    img: `scrolloff-step-${String(i + 20).padStart(2, "0")}`,
+    title: SCROLL_TITLE,
+    dur: i === 13 ? 1.6 : 0.26,
+    camera: SCROLL_CAMERA,
+    cameraKey: "scrolloff",
+    highlight: { x: 0.004, y: 0.812, width: 0.76, height: 0.158 },
+    highlightKey: "scrolloff",
+    capKey: "scrolloff-context",
+    caption: `the view scrolls early — <span class="hl">5 rows</span> stay ahead`,
+  })),
 
   // Shell completions.
   { kind: "card", html: COMPLETION_CARD, dur: 2.6, enter: true },

@@ -776,9 +776,83 @@ async function captureCompletionScene() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Scene: conflict diffs — `hunk diff` during a paused merge.
+// ---------------------------------------------------------------------------
+async function captureConflictScene() {
+  console.log("scene: conflict");
+  const { repoDir } = createTaskboardRepo();
+  const renderPath = join(repoDir, "src/render.ts");
+  const commitRender = (message: string, from: string, to: string) => {
+    writeFileSync(renderPath, readFileSync(renderPath, "utf8").replace(from, to));
+    runGit(["commit", "-qam", message], repoDir);
+  };
+
+  // Both branches restyle the same two lines of the board renderer.
+  runGit(["switch", "-qc", "glyph-markers"], repoDir);
+  commitRender(
+    "Use glyph markers",
+    'const marker = task.blocked ? "!" : "-";',
+    'const marker = task.blocked ? "⚠" : "•";',
+  );
+  commitRender(
+    "Rename progress column",
+    '{ state: "doing", label: "In progress" }',
+    '{ state: "doing", label: "Doing" }',
+  );
+  runGit(["switch", "-q", "main"], repoDir);
+  commitRender(
+    "Mark blocked tasks in text",
+    'const marker = task.blocked ? "!" : "-";',
+    'const marker = task.blocked ? "[blocked]" : "[ ]";',
+  );
+  commitRender(
+    "Clarify progress column",
+    '{ state: "doing", label: "In progress" }',
+    '{ state: "doing", label: "Active" }',
+  );
+  const merge = spawnSync("git", ["merge", "glyph-markers"], { cwd: repoDir, encoding: "utf8" });
+  if (merge.status === 0) throw new Error("expected the demo merge to conflict");
+
+  const session = await launchHunk(["diff", "--mode", "unified"], { cwd: repoDir });
+  try {
+    await session.waitForText(/render\.ts/, { timeout: 60_000 });
+    await ensureKeyboardIsLive(session, HUNK_KEYBOARD_PROBE);
+    await sleep(900);
+    await snap(session, "conflict-review");
+  } finally {
+    session.close();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Scene: scroll_off — stepping the cursor keeps rows of context below it.
+// ---------------------------------------------------------------------------
+async function captureScrollOffScene() {
+  console.log("scene: scrolloff");
+  const { repoDir } = createTaskboardRepo();
+  cpSync(join(repoRoot, "examples/2-mini-app-refactor/after"), repoDir, { recursive: true });
+  const session = await launchHunk(["diff", "--mode", "unified"], { cwd: repoDir });
+  try {
+    await session.waitForText(/src\//, { timeout: 60_000 });
+    await ensureKeyboardIsLive(session, HUNK_KEYBOARD_PROBE);
+    await sleep(800);
+    await snap(session, "scrolloff-start");
+
+    // One snap per press so playback shows the view following the cursor.
+    for (let step = 0; step < 34; step += 1) {
+      await session.press("j");
+      await sleep(140);
+      await snap(session, `scrolloff-step-${String(step).padStart(2, "0")}`);
+    }
+  } finally {
+    session.close();
+  }
+}
+
 // The current storyboard is the 0.24 release roundup; opt into other reusable
-// scenes with a comma-separated override, e.g. SCENES=status,history.
-const wants = makeSceneFilter(process.env.SCENES ?? "open,layout,skill,completion");
+// scenes with a comma-separated override, e.g. SCENES=status,skill,history.
+const wants = makeSceneFilter(process.env.SCENES ?? "open,layout,conflict,scrolloff,completion");
 
 async function main() {
   try {
@@ -787,6 +861,8 @@ async function main() {
     if (wants("layout")) await captureLayoutScene();
     if (wants("skill")) await captureSkillScene();
     if (wants("completion")) await captureCompletionScene();
+    if (wants("conflict")) await captureConflictScene();
+    if (wants("scrolloff")) await captureScrollOffScene();
     if (wants("history")) await captureHistoryScene();
     if (wants("review")) await captureReviewScene();
     if (wants("stml")) await captureStmlScene();
