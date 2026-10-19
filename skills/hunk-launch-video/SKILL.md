@@ -148,8 +148,8 @@ checked-in demo coverage and belongs to the submitted change.
 ## Per-video editorial surface
 
 The capture machinery is reusable, but the storyboard is editorial content for
-one video. Rewrite it to match the video's scope. The checked-in reference is a
-single-feature Git-history video, not a frozen release artifact:
+one video. Rewrite it to match the video's scope. The checked-in reference is the
+0.24 release roundup, not a frozen release artifact:
 
 - `compose.mjs`: the whole `SHOTS` table; opening, feature, and outro cards;
   every caption; camera targets; and callout rectangles. A `NEW` badge is a
@@ -280,10 +280,11 @@ Sandbox-specific bullets are marked; each cost real debugging time.
   changes, and continuation shots that share a `capKey` without restating
   `caption` keep the previous caption on screen. Sequences (walks, typing) are
   generated with `Array.from` spreads.
-- **Sequence lengths must match capture loop bounds**: the history capture's
-  `selected = 2..4` loop produces `history-range-2..4`, consumed by a
-  three-entry `Array.from` spread in `SHOTS`. Change one side and the other
-  breaks — the preflight check names any frame that's missing.
+- **Sequence lengths must match capture loop bounds**: the open capture's
+  four-step tree walk plus its select and expand presses produce
+  `open-tree-0..5`, consumed by a six-entry `Array.from` spread in `SHOTS`.
+  Change one side and the other breaks — the preflight check names any frame
+  that's missing.
 - `enter: true` fades/scales the surface in — use it for cards and the first
   terminal shot only.
 - Terminal shots may set normalized `camera: { x, y, scale }` targets and
