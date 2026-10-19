@@ -1,101 +1,84 @@
-// Renders the social promo cut: steps promo.html's renderAt(t) frame by frame
-// in headless Chromium and encodes the frames with ffmpeg.
+// Renders a release's social promo in Hunk's promo style.
 //
-//   node scripts/launch-video/promo/render.mjs <workDir> [--stills 1.2,5.5] [--fps 30]
+//   node scripts/launch-video/promo/render.mjs <workDir> [--storyboard <file>]
+//     [--stills 1.5,8.2] [--fps 30] [--out <file.mp4>]
 //
-// <workDir> is the capture output dir (contains frames/ and avatars/<login>.png
-// for the contributors scene) with playwright-core and
-// @fontsource-variable/jetbrains-mono installed in its node_modules.
-// Output: <workDir>/promo.mp4, or <workDir>/stills/*.png with --stills.
-import { spawnSync } from "node:child_process";
+// The storyboard (default: the newest in storyboards/) supplies the release
+// content; engine.js supplies the style. <workDir> is the capture output dir:
+// frames/ from capture.ts, contributors.json and avatars/ from
+// contributors.mjs (optional; the credits scene is skipped without them), and
+// a node_modules with playwright-core plus @fontsource-variable/jetbrains-mono.
+// Output: <workDir>/promo-<version>.mp4, or review stills in <workDir>/stills/.
 import { createRequire } from "node:module";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { findCaptionFont, resolveChromium } from "@hunk/term-video/compose";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { findCaptionFont } from "@hunk/term-video/compose";
+import { renderTimeline } from "@hunk/term-video/timeline";
+import {
+  loadStoryboard,
+  parseArgs,
+  promoDir,
+  repoRoot,
+  storyboardProblems,
+} from "./storyboard.mjs";
 
-const scriptDir = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(scriptDir, "../../..");
-const args = process.argv.slice(2);
-const workDir = resolve(args.find((arg) => !arg.startsWith("--")) ?? join(repoRoot, ".video-work"));
-const flag = (name) => {
-  const index = args.indexOf(`--${name}`);
-  return index >= 0 ? args[index + 1] : undefined;
-};
-const fps = Number(flag("fps") ?? 30);
-const stills = flag("stills")?.split(",").map(Number);
+const args = parseArgs(process.argv.slice(2));
+const workDir = resolve(args.positional[0] ?? join(repoRoot, ".video-work"));
+const { storyboard, path } = await loadStoryboard(args.flags.storyboard);
+const framesDir = join(workDir, "frames");
 
-const require = createRequire(join(workDir, "package.json"));
-const { chromium } = require("playwright-core");
-const fontPath =
-  require.resolve("@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2");
-
-const builtPath = join(workDir, "promo-built.html");
-writeFileSync(
-  builtPath,
-  readFileSync(join(scriptDir, "promo.html"), "utf8")
-    .replace("FONT_URL", pathToFileURL(fontPath).href)
-    .replace("NERD_FONT_URL", pathToFileURL(findCaptionFont(repoRoot)).href)
-    .replace("FRAMES_URL", pathToFileURL(join(workDir, "frames")).href)
-    .replace("AVATARS_URL", pathToFileURL(join(workDir, "avatars")).href),
-);
-
-const browser = await chromium.launch({
-  executablePath: resolveChromium(),
-  headless: true,
-  args: ["--allow-file-access-from-files"],
-});
-const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
-page.on("pageerror", (error) => console.error("page error:", error.message));
-await page.goto(pathToFileURL(builtPath).href);
-await page.evaluate(() => window.promoReady);
-const duration = await page.evaluate(() => window.PROMO_DURATION);
-
-if (stills) {
-  const outDir = join(workDir, "stills");
-  mkdirSync(outDir, { recursive: true });
-  for (const t of stills) {
-    await page.evaluate((time) => window.renderAt(time), t);
-    await page.screenshot({ path: join(outDir, `t${t.toFixed(2)}.png`) });
-  }
-  console.log(`rendered ${stills.length} stills (duration ${duration.toFixed(2)}s) -> ${outDir}`);
-} else {
-  const outDir = join(workDir, "promo-out");
-  rmSync(outDir, { recursive: true, force: true });
-  mkdirSync(outDir, { recursive: true });
-  const total = Math.round(duration * fps);
-  for (let frame = 0; frame < total; frame += 1) {
-    await page.evaluate((time) => window.renderAt(time), frame / fps);
-    await page.screenshot({ path: join(outDir, `f${String(frame).padStart(5, "0")}.png`) });
-    if (frame % 60 === 0 || frame === total - 1) console.log(`frame ${frame + 1}/${total}`);
-  }
-  const output = join(workDir, "promo.mp4");
-  const ffmpeg = spawnSync(
-    "ffmpeg",
-    [
-      "-y",
-      "-loglevel",
-      "error",
-      "-framerate",
-      String(fps),
-      "-i",
-      join(outDir, "f%05d.png"),
-      "-vf",
-      "format=yuv420p",
-      "-c:v",
-      "libx264",
-      "-preset",
-      "slow",
-      "-crf",
-      "18",
-      "-movflags",
-      "+faststart",
-      output,
-    ],
-    { stdio: "inherit" },
+const problems = storyboardProblems(storyboard);
+if (problems.length > 0) {
+  throw new Error(
+    `${path} is not a valid storyboard:\n${problems.map((p) => `  ${p}`).join("\n")}`,
   );
-  if (ffmpeg.status !== 0) throw new Error("ffmpeg failed");
-  console.log(`${total} frames, ${duration.toFixed(2)}s -> ${output}`);
 }
 
-await browser.close();
+// Fail fast on keyframes the storyboard names but capture.ts has not produced.
+const missing = storyboard.chapters
+  .flatMap((chapter) => chapter.frames.map((frame) => frame.img))
+  .filter((name) => !existsSync(join(framesDir, `${name}.png`)));
+if (missing.length > 0) {
+  throw new Error(
+    `missing keyframes in ${framesDir}:\n${[...new Set(missing)].map((name) => `  ${name}`).join("\n")}\n` +
+      "run scripts/launch-video/capture.ts first (SCENES=<scene,...> for a partial capture)",
+  );
+}
+
+const contributorsPath = join(workDir, "contributors.json");
+const contributors = existsSync(contributorsPath)
+  ? JSON.parse(readFileSync(contributorsPath, "utf8"))
+  : [];
+if (contributors.length === 0) {
+  console.warn("no contributors.json in the work dir; skipping the credits scene");
+}
+
+const require = createRequire(join(workDir, "package.json"));
+const fontPath =
+  require.resolve("@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2");
+const promo = {
+  storyboard,
+  contributors,
+  framesUrl: pathToFileURL(framesDir).href,
+  avatarsUrl: pathToFileURL(join(workDir, "avatars")).href,
+};
+const pagePath = join(workDir, "promo-built.html");
+writeFileSync(
+  pagePath,
+  readFileSync(join(promoDir, "stage.html"), "utf8")
+    .replace("FONT_URL", pathToFileURL(fontPath).href)
+    .replace("NERD_FONT_URL", pathToFileURL(findCaptionFont(repoRoot)).href)
+    .replace("ENGINE_URL", pathToFileURL(join(promoDir, "engine.js")).href)
+    // Escape "<" so storyboard HTML strings cannot close the inline script.
+    .replace("PROMO_JSON", JSON.stringify(promo).replaceAll("<", "\\u003c")),
+);
+
+console.log(`storyboard ${path}`);
+await renderTimeline({
+  pagePath,
+  workDir,
+  fps: Number(args.flags.fps ?? 30),
+  stills: args.flags.stills?.split(",").map(Number),
+  output: resolve(args.flags.out ?? join(workDir, `promo-${storyboard.version}.mp4`)),
+});

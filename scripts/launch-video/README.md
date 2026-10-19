@@ -12,11 +12,8 @@ The full procedure — regeneration steps, environment gotchas, scene authoring,
 storyboard model, and content-accuracy rules — lives in
 [`skills/hunk-launch-video/SKILL.md`](../../skills/hunk-launch-video/SKILL.md).
 
-`promo/` holds a free-form social cut: `promo.html` exposes a deterministic
-`renderAt(t)` motion page built around the brand mark (h-shaped zoom
-transitions, offset-outline extrusions, keycaps, stickers) over the same
-captured frames, and `promo/render.mjs` steps it frame by frame and encodes
-`<workDir>/promo.mp4`. Its work dir also needs
-`@fontsource-variable/jetbrains-mono` and, for the contributors scene,
-`avatars/<login>.png` downloaded from each contributor's GitHub avatar;
-`--stills 1.5,8` renders review stills.
+`promo/` is the house style for release videos: `engine.js` and
+`stage.html` are the reusable style kit, `storyboards/<version>.mjs` holds one
+release's content, `contributors.mjs` computes the credits from a tag range,
+and `render.mjs` renders the cut through `@hunk/term-video/timeline`. The
+full-release recipe in the skill walks through making the next one.
