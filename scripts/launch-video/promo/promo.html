@@ -1030,6 +1030,171 @@
         };
       }
 
+      // --- Contributors: avatar tiles fly in and assemble into the h.
+      const AVATARS = "AVATARS_URL";
+      // Everyone who authored or co-authored a commit between v0.23.0 and
+      // 0.24.0 (bots and AI co-author trailers excluded). Filip Taifas has no
+      // confirmed GitHub account, so his tile shows initials.
+      const CONTRIBUTORS = [
+        "benvinegar",
+        "HackAttack",
+        "elucid",
+        "andrewloux",
+        "bottercode",
+        "0xferrous",
+        "strawberry-little-bear",
+        "mikemikimike",
+        "edenbuilds",
+        "teepark",
+        "silvioprog",
+        "rnihesh",
+        "mvanhorn",
+        "masonmcelvain",
+        "Lawgk",
+        "LandonSchropp",
+        "igshehata",
+        "brettinternet",
+        "andreifilip123",
+        "Ajay-Satish-01",
+        "shashank-100",
+        { name: "Filip Taifas", initials: "FT" },
+      ];
+      // A 5x6 block h has exactly 22 cells: stem, shoulder, and two legs.
+      const H_CELLS = [
+        [0, 0],
+        [1, 0],
+        [0, 1],
+        [1, 1],
+        [0, 2],
+        [1, 2],
+        [2, 2],
+        [3, 2],
+        [4, 2],
+        [0, 3],
+        [1, 3],
+        [2, 3],
+        [3, 3],
+        [4, 3],
+        [0, 4],
+        [1, 4],
+        [3, 4],
+        [4, 4],
+        [0, 5],
+        [1, 5],
+        [3, 5],
+        [4, 5],
+      ];
+      const avatarLoads = [];
+
+      function buildContributors(root) {
+        const stream = buildDiffStream(root, 222, {
+          add: "rgba(93,208,106,0.08)",
+          del: "rgba(239,107,91,0.06)",
+          ctx: "rgba(244,241,234,0.03)",
+        });
+        root.appendChild(el("div", "vignette"));
+        const C = 124;
+        const G = 12;
+        const T = C - G;
+        const ox = 230;
+        const oy = Math.round((1080 - (6 * C - G)) / 2);
+        const ex = 18;
+        const W = 5 * C - G;
+        const H = 6 * C - G;
+        // The h silhouette, offset like the logo's outline extrusion.
+        const outline = `M0 0H${2 * C - G}V${2 * C}H${W}V${H}H${3 * C}V${4 * C - G}H${2 * C - G}V${H}H0Z`;
+        const exSvg = el("div", "abs");
+        exSvg.style.left = `${ox + ex}px`;
+        exSvg.style.top = `${oy + ex}px`;
+        exSvg.innerHTML = `<svg width="${W + 10}" height="${H + 10}" style="overflow:visible"><path d="${outline}" fill="none" stroke="#5dd06a" stroke-width="5" stroke-linejoin="miter"/></svg>`;
+        root.appendChild(exSvg);
+        const exPath = exSvg.querySelector("path");
+
+        const r = rng(4242);
+        const tiles = CONTRIBUTORS.map((who, i) => {
+          const tile = el("div", "abs");
+          tile.style.width = `${T}px`;
+          tile.style.height = `${T}px`;
+          tile.style.border = "4px solid #f4f1ea";
+          tile.style.borderRadius = "6px";
+          tile.style.overflow = "hidden";
+          tile.style.background = "#5dd06a";
+          if (typeof who === "string") {
+            const img = el("img");
+            img.src = `${AVATARS}/${who}.png`;
+            img.style.width = "100%";
+            img.style.height = "100%";
+            img.style.display = "block";
+            avatarLoads.push(img.decode().catch(() => {}));
+            tile.appendChild(img);
+          } else {
+            tile.innerHTML = `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:48px;font-weight:800;color:#16140f">${who.initials}</div>`;
+          }
+          root.appendChild(tile);
+          const [cx, cy] = H_CELLS[i];
+          const angle = r() * Math.PI * 2;
+          const dist = 900 + r() * 500;
+          return {
+            tile,
+            tx: ox + cx * C,
+            ty: oy + cy * C,
+            sx: 960 + Math.cos(angle) * dist - T / 2,
+            sy: 540 + Math.sin(angle) * dist * 0.7 - T / 2,
+            rot: (r() - 0.5) * 120,
+            delay: 0.1 + i * 0.055 + r() * 0.05,
+          };
+        });
+
+        const text = el("div", "abs");
+        text.style.left = "1000px";
+        text.style.top = "250px";
+        text.style.width = "860px";
+        text.innerHTML = `
+          <div style="font-size:250px;font-weight:800;line-height:0.9;letter-spacing:-0.05em"><span class="n">0</span></div>
+          <div class="lbl" style="font-size:88px;font-weight:800;letter-spacing:-0.03em;color:#5dd06a">contributors</div>
+          <div class="sub" style="margin-top:22px;font-size:36px;font-weight:600;color:#c3c9cf">shipped 0.24 together. thank you.</div>
+          <div class="names" style="margin-top:34px;font-size:22px;line-height:1.6;color:#9aa4af">${CONTRIBUTORS.map((who) => `<span style="white-space:nowrap">${typeof who === "string" ? `@${who}` : who.name}</span>`).join(" · ")}</div>
+        `;
+        root.appendChild(text);
+        const count = text.querySelector(".n");
+        const lbl = text.querySelector(".lbl");
+        const sub = text.querySelector(".sub");
+        const names = text.querySelector(".names");
+
+        return (t) => {
+          stream(t);
+          let landed = 0;
+          for (const tl of tiles) {
+            const p = seg(t, tl.delay, tl.delay + 0.55);
+            const m = E.out5(p);
+            const x = lerp(tl.sx, tl.tx, m);
+            const y = lerp(tl.sy, tl.ty, m);
+            const s = p >= 1 ? 1 : lerp(0.5, 1, E.outBack(p));
+            tl.tile.style.transform = `translate(${x}px, ${y}px) rotate(${(1 - m) * tl.rot}deg) scale(${s})`;
+            tl.tile.style.left = "0";
+            tl.tile.style.top = "0";
+            tl.tile.style.opacity = p > 0 ? 1 : 0;
+            if (p >= 0.92) landed += 1;
+          }
+          count.textContent = String(landed);
+          const len = exPath.getTotalLength();
+          const pe = E.out3(seg(t, 1.55, 2.1));
+          exPath.style.strokeDasharray = `${len}`;
+          exPath.style.strokeDashoffset = `${len * (1 - pe)}`;
+          const pl = E.out3(seg(t, 0.2, 0.6));
+          lbl.style.opacity = pl;
+          const ps = E.out3(seg(t, 1.6, 2.0));
+          sub.style.opacity = ps;
+          sub.style.transform = `translateY(${(1 - ps) * 20}px)`;
+          names.style.opacity = E.out3(seg(t, 1.9, 2.4));
+          // Pop the count once the h is complete.
+          const pop = seg(t, 1.45, 1.75);
+          count.parentElement.style.transform = `scale(${1 + Math.sin(pop * Math.PI) * 0.08})`;
+          count.parentElement.style.transformOrigin = "0 70%";
+          count.parentElement.style.color = landed === tiles.length ? "#f4f1ea" : "#c3c9cf";
+        };
+      }
+
       // --- Outro: lockup, install command typed out.
       function buildOutro(root) {
         const stream = buildDiffStream(root, 99, {
@@ -1314,6 +1479,7 @@
         { build: buildMontage(MONTAGE), theme: "ink", trans: slantWipe, transDur: 0.4 },
         MONTAGE.length * 0.62 + 1.35,
       );
+      push({ build: buildContributors, theme: "ink", trans: slantWipe, transDur: 0.4 }, 4.2);
       push({ build: buildOutro, theme: "ink", trans: hZoom, transDur: 0.8 }, 5.2);
       window.PROMO_DURATION = cursor;
 
@@ -1344,6 +1510,7 @@
       window.promoReady = document.fonts.ready.then(async () => {
         await document.fonts.load('800 40px "JBM"');
         await document.fonts.load('400 40px "JBM Nerd"');
+        await Promise.all(avatarLoads);
         return true;
       });
     </script>

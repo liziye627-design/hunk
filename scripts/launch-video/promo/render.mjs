@@ -3,8 +3,9 @@
 //
 //   node scripts/launch-video/promo/render.mjs <workDir> [--stills 1.2,5.5] [--fps 30]
 //
-// <workDir> is the capture output dir (contains frames/) with playwright-core
-// and @fontsource-variable/jetbrains-mono installed in its node_modules.
+// <workDir> is the capture output dir (contains frames/ and avatars/<login>.png
+// for the contributors scene) with playwright-core and
+// @fontsource-variable/jetbrains-mono installed in its node_modules.
 // Output: <workDir>/promo.mp4, or <workDir>/stills/*.png with --stills.
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
@@ -35,7 +36,8 @@ writeFileSync(
   readFileSync(join(scriptDir, "promo.html"), "utf8")
     .replace("FONT_URL", pathToFileURL(fontPath).href)
     .replace("NERD_FONT_URL", pathToFileURL(findCaptionFont(repoRoot)).href)
-    .replace("FRAMES_URL", pathToFileURL(join(workDir, "frames")).href),
+    .replace("FRAMES_URL", pathToFileURL(join(workDir, "frames")).href)
+    .replace("AVATARS_URL", pathToFileURL(join(workDir, "avatars")).href),
 );
 
 const browser = await chromium.launch({

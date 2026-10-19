@@ -17,4 +17,6 @@ storyboard model, and content-accuracy rules — lives in
 transitions, offset-outline extrusions, keycaps, stickers) over the same
 captured frames, and `promo/render.mjs` steps it frame by frame and encodes
 `<workDir>/promo.mp4`. Its work dir also needs
-`@fontsource-variable/jetbrains-mono`; `--stills 1.5,8` renders review stills.
+`@fontsource-variable/jetbrains-mono` and, for the contributors scene,
+`avatars/<login>.png` downloaded from each contributor's GitHub avatar;
+`--stills 1.5,8` renders review stills.
