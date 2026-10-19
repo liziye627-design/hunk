@@ -496,7 +496,8 @@
         face.setAttribute("fill", faceColor);
         const faceG = document.createElementNS(ns, "g");
         faceG.appendChild(face);
-        svg.appendChild(faceG);
+        // Strokes sit beneath the face, as in the logo, so the stem's diagonal
+        // stops where it meets the face instead of crossing it.
         const strokes = MARK_STROKES.map((d) => {
           const p = document.createElementNS(ns, "path");
           p.setAttribute("d", d);
@@ -507,6 +508,7 @@
           svg.appendChild(p);
           return p;
         });
+        svg.appendChild(faceG);
         const letters = [];
         if (wordmark) {
           const wg = document.createElementNS(ns, "g");
