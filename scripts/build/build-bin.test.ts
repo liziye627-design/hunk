@@ -64,8 +64,19 @@ describe("compileCommand", () => {
 
 describe("parseBuildOptions", () => {
   test("reads --runtime-executable in both spellings", () => {
-    expect(parseBuildOptions(["--runtime-executable", "/x/bun"]).runtimeExecutable).toBe("/x/bun");
-    expect(parseBuildOptions(["--runtime-executable=/x/bun"]).runtimeExecutable).toBe("/x/bun");
+    const runtime = path.resolve("/x/bun");
+
+    expect(parseBuildOptions(["--runtime-executable", runtime]).runtimeExecutable).toBe(runtime);
+    expect(parseBuildOptions([`--runtime-executable=${runtime}`]).runtimeExecutable).toBe(runtime);
+  });
+
+  test("resolves a relative runtime against the caller's cwd, not the compiler's", () => {
+    const callerCwd = path.resolve("/caller");
+
+    expect(
+      parseBuildOptions(["--runtime-executable", path.join("bin", "bun")], callerCwd)
+        .runtimeExecutable,
+    ).toBe(path.join(callerCwd, "bin", "bun"));
   });
 
   test("defaults to letting Bun resolve the runtime", () => {

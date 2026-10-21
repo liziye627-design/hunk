@@ -104,8 +104,13 @@ export function compileCommand({
   ];
 }
 
-/** Parses the script's command line; throws on unknown options. */
-export function parseBuildOptions(argv: string[]) {
+/**
+ * Parses the script's command line; throws on unknown options.
+ *
+ * Resolves `--runtime-executable` against the caller's `cwd` because the compiler runs from the
+ * repo root, where a relative path would point somewhere else.
+ */
+export function parseBuildOptions(argv: string[], cwd = process.cwd()) {
   const { values } = parseArgs({
     args: argv,
     options: {
@@ -114,7 +119,8 @@ export function parseBuildOptions(argv: string[]) {
     strict: true,
   });
 
-  return { runtimeExecutable: values["runtime-executable"] ?? null };
+  const runtimeExecutable = values["runtime-executable"];
+  return { runtimeExecutable: runtimeExecutable ? path.resolve(cwd, runtimeExecutable) : null };
 }
 
 if (import.meta.main) {
