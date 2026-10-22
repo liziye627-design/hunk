@@ -38,8 +38,8 @@
       system: let
         pkgs = import nixpkgs {
           inherit system;
-          # TEMPORARY: eMudhra root-store workaround for the dev shell's node and
-          # bun on macOS; self-retiring, see nix/emudhra-overlay.nix.
+          # TEMPORARY: eMudhra root-store workaround for the dev shell's bun (all
+          # systems) and node (macOS); self-retiring, see nix/emudhra-overlay.nix.
           overlays = [(import ./nix/emudhra-overlay.nix)];
         };
         hunk = pkgs.callPackage ./nix/package.nix {
