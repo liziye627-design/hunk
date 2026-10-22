@@ -7,7 +7,7 @@ import type { InteractiveSessionInitialization } from "../core/session/initializ
 import { createExtensionSession } from "../extensions/session";
 import type { ExtensionLoadResult } from "../extensions/types";
 import { HunkSessionHost, type StandaloneReviewSurfaceRoute } from "./session/HunkSessionHost";
-import { runHunkSession } from "./session/runHunkSession";
+import { runHunkSession, type RendererInput } from "./session/runHunkSession";
 
 export interface InteractiveAppInput {
   bootstrap: AppBootstrap<ExtensionLoadResult>;
@@ -33,11 +33,8 @@ export async function runInteractiveApp(
 ): Promise<void> {
   const createReviewRuntime = deps.createReviewRuntime ?? createReviewSessionRuntime;
   const runSession = deps.runSession ?? runHunkSession;
-  // OpenTUI 0.5.x declares the socket-backed `NodeJS.ReadStream` but only reads `isTTY`,
-  // `setRawMode`, `on`/`removeListener("data")`, `pause`/`resume`, `read`, and `readableLength`,
-  // all of which the controlling-terminal input provides. The cast cannot catch OpenTUI drift;
-  // re-audit `CliRenderer`'s stdin use when bumping `@opentui/core`.
-  const rendererStdin = (controllingTerminal?.stdin ?? process.stdin) as NodeJS.ReadStream;
+  // Checked structurally so a controlling-terminal input missing a renderer member fails to compile.
+  const rendererStdin: RendererInput = controllingTerminal?.stdin ?? process.stdin;
   let terminalClosed = false;
   const closeTerminal = () => {
     if (terminalClosed) return;
