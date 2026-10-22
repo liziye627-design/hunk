@@ -4,7 +4,7 @@
 # nix-darwin `security.pki.caCertificateBlacklist` fix does not reach it. Node
 # 24.22.1 (2026-10-20) is the first release whose root store (NSS 3.131.1 plus the
 # blocked-SPKI check) rejects the compromised eMudhra intermediates; the flake's
-# nixpkgs pin still carries 24.21.0. `nix/emudhra-overlay.nix` substitutes this
+# nixpkgs pin still carries 24.14.1. `nix/emudhra-overlay.nix` substitutes this
 # derivation for `nodejs`/`nodejs_24` only while that pin is older than 24.22.1,
 # so the file retires itself once `nix flake update` catches up.
 #
