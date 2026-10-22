@@ -190,6 +190,14 @@ export function resolveControllingTerminalDevice(
  * - At most one native read is in flight; `_read` is a no-op while one is pending.
  * - `_destroy` cancels the native reader before closing the raw-mode descriptor, so an in-flight
  *   read settles as done instead of holding the process open.
+ * - The raw-mode `tty.ReadStream` stays dormant: Bun's `fs.ReadStream` only issues `read(2)` from
+ *   `_read`, which runs once something calls `read()`/`resume()`/`pipe()` or attaches a
+ *   `data`/`readable` listener. Never do any of those on it; a flowing handle would steal
+ *   keystrokes from the device stream and park the blocking read this class exists to avoid.
+ * - That handle owns no native resource or finalizer, so `_destroy` closes its descriptor with
+ *   `closeSync` instead of destroying the stream. Callers leave raw mode before destroying
+ *   (OpenTUI does so before `onDestroy`); after `_destroy` the descriptor number may belong to an
+ *   unrelated file, so the handle must not be touched again.
  */
 export class ControllingTerminalInput extends Readable {
   readonly isTTY = true;
@@ -221,11 +229,18 @@ export class ControllingTerminalInput extends Readable {
     return this;
   }
 
-  /** The poll-driven reader already keeps the loop alive only while a read is pending. */
+  /**
+   * Accept `ref()` for `tty.ReadStream` shape compatibility only; it does not change event-loop
+   * liveness. Once the first read is issued, the device stream keeps the loop alive until
+   * `destroy()` cancels the reader; completed reads, `pause()`, and `unref()` do not release it.
+   * That keeps the pager alive while idle (OpenTUI's keep-alive timer only runs for
+   * `process.stdin`), so callers must `destroy()` through `ControllingTerminal.close` to exit.
+   */
   ref(): this {
     return this;
   }
 
+  /** Accept `unref()` as a no-op; see `ref()`. Only `destroy()` releases the loop. */
   unref(): this {
     return this;
   }
