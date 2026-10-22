@@ -33,8 +33,10 @@ export async function runInteractiveApp(
 ): Promise<void> {
   const createReviewRuntime = deps.createReviewRuntime ?? createReviewSessionRuntime;
   const runSession = deps.runSession ?? runHunkSession;
-  // OpenTUI types its input as the socket-derived `NodeJS.ReadStream` but only uses the Readable
-  // surface plus `setRawMode`, which the controlling-terminal input provides.
+  // OpenTUI 0.5.x declares the socket-backed `NodeJS.ReadStream` but only reads `isTTY`,
+  // `setRawMode`, `on`/`removeListener("data")`, `pause`/`resume`, `read`, and `readableLength`,
+  // all of which the controlling-terminal input provides. The cast cannot catch OpenTUI drift;
+  // re-audit `CliRenderer`'s stdin use when bumping `@opentui/core`.
   const rendererStdin = (controllingTerminal?.stdin ?? process.stdin) as NodeJS.ReadStream;
   let terminalClosed = false;
   const closeTerminal = () => {
