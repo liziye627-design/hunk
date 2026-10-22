@@ -33,7 +33,9 @@ export async function runInteractiveApp(
 ): Promise<void> {
   const createReviewRuntime = deps.createReviewRuntime ?? createReviewSessionRuntime;
   const runSession = deps.runSession ?? runHunkSession;
-  const rendererStdin = controllingTerminal?.stdin ?? process.stdin;
+  // OpenTUI types its input as the socket-derived `NodeJS.ReadStream` but only uses the Readable
+  // surface plus `setRawMode`, which the controlling-terminal input provides.
+  const rendererStdin = (controllingTerminal?.stdin ?? process.stdin) as NodeJS.ReadStream;
   let terminalClosed = false;
   const closeTerminal = () => {
     if (terminalClosed) return;
